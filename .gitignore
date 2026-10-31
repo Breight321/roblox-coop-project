@@ -1,0 +1,7 @@
+# Roblox Studio / Rojo build artifacts
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+*.lock
+sourcemap.json
