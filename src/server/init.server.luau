@@ -14,6 +14,7 @@ local Network = require(Core:WaitForChild("Network"))
 local Registry = require(Core:WaitForChild("Registry"))
 local GameConfig = require(Shared:WaitForChild("Config"):WaitForChild("GameConfig"))
 local FrameworkTests = require(Shared:WaitForChild("Tests"):WaitForChild("FrameworkTests"))
+local CombatLoopTests = require(Shared:WaitForChild("Tests"):WaitForChild("CombatLoopTests"))
 
 local log = Logger.new("ServerBootstrap")
 log:Info("Bootstrapping Roblox Simulator Framework v%s (Server)...", GameConfig.GameVersion)
@@ -42,7 +43,7 @@ if initRes.ok then
 	serverRegistry:StartAll()
 	log:Info("Server Bootstrap complete.")
 
-	-- 3. Запуск модульных и интеграционных тестов фреймворка, экономики и вертикального среза добычи
+	-- 3. Запуск модульных и интеграционных тестов фреймворка, экономики, вертикального среза добычи и Combat Loop v1
 	if GameConfig.RunTestsOnStartup then
 		local coreSummary = FrameworkTests.RunAll()
 		if coreSummary.failed > 0 then
@@ -69,6 +70,11 @@ if initRes.ok then
 			if harvestSummary.failed > 0 then
 				log:Warn("SunforgeHarvestBackendSuite reported %d failures!", harvestSummary.failed)
 			end
+		end
+
+		local combatSummary = CombatLoopTests.RunAll()
+		if combatSummary.failed > 0 then
+			log:Warn("CombatLoopBackendSuite reported %d failures!", combatSummary.failed)
 		end
 	end
 else

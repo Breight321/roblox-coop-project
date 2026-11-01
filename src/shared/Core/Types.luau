@@ -2,7 +2,7 @@
 --[[
 	@module Types
 	@owner Shared (Agent A: Breight321 & Agent B: anarugod)
-	@description Универсальные строгие Luau-типы и контракты для Universal Reusable Roblox Framework и вертикального среза Sunforge Expedition.
+	@description Универсальные строгие Luau-типы и контракты для Universal Reusable Roblox Framework, Sunforge Expedition и Combat Loop v1.
 ]]
 
 export type Result<T, E = string> = {
@@ -279,6 +279,244 @@ export type ServerProgressPayload = {
 	stageBonusMultiplier: number,
 	unlockedExtractionZones: { [string]: boolean },
 	isMaxStage: boolean,
+}
+
+-- ============================================================================
+-- COMBAT LOOP v1: Мобы, Детали тела, Сундуки, Дерево навыков и PvP-арена
+-- ============================================================================
+
+export type BodySlot = "Head" | "Arms" | "Torso" | "Legs"
+export type SkillBranch = "Damage" | "Defense" | "Mobility"
+
+export type BodyStatBlock = {
+	attackPower: number?,
+	critChance: number?,
+	critMultiplier: number?,
+	maxHealth: number?,
+	defense: number?,
+	moveSpeed: number?,
+	attackCooldownReduction: number?,
+	attackPowerPct: number?,
+	maxHealthPct: number?,
+}
+
+export type BodySetDef = {
+	id: string,
+	displayName: string,
+	description: string,
+	requiredPieceCount: number,
+	fullSetBonus: BodyStatBlock,
+	visualTheme: {
+		style: string,
+		primaryColor: string,
+		accentColor: string,
+		material: string,
+		glow: boolean,
+	},
+}
+
+export type CharacterStatsPayload = {
+	level: number,
+	attackPower: number,
+	critChance: number,
+	critMultiplier: number,
+	maxHealth: number,
+	defense: number,
+	damageReduction: number,
+	moveSpeed: number,
+	attackCooldown: number,
+	equippedBodyParts: { [BodySlot]: string },
+	activeSetBonus: string?,
+}
+
+export type CombatErrorCode =
+	"INVALID_PLAYER"
+	| "PROFILE_NOT_LOADED"
+	| "CHARACTER_NOT_READY"
+	| "PLAYER_DEAD"
+	| "INVALID_TARGET"
+	| "TARGET_DEAD"
+	| "OUT_OF_RANGE"
+	| "ATTACK_COOLDOWN"
+	| "ZONE_LOCKED"
+	| "LEVEL_TOO_LOW"
+	| "IN_ARENA"
+
+export type LootDrop = {
+	kind: "Currency" | "XP" | "Item",
+	id: string,
+	amount: number,
+	itemUid: string?,
+}
+
+export type LootEntryDef = {
+	kind: "Currency" | "XP" | "Item",
+	id: string,
+	minAmount: number,
+	maxAmount: number,
+	weight: number,
+	guaranteed: boolean?,
+}
+
+export type LootTableDef = {
+	id: string,
+	rolls: number,
+	entries: { LootEntryDef },
+}
+
+export type MobDef = {
+	id: string,
+	displayName: string,
+	zoneId: string,
+	level: number,
+	maxHealth: number,
+	attackDamage: number,
+	attackIntervalSeconds: number,
+	aggroRange: number,
+	respawnSeconds: number,
+	rewardXP: number,
+	rewardCoins: number,
+	lootTableId: string?,
+	spawnPositions: { Vector3 },
+}
+
+export type CombatResultPayload = {
+	ok: boolean,
+	mobUid: string,
+	damageDealt: number,
+	isCritical: boolean,
+	mobHealth: number,
+	mobMaxHealth: number,
+	killed: boolean,
+	errorCode: CombatErrorCode?,
+	message: string,
+}
+
+export type MobDefeatedPayload = {
+	mobUid: string,
+	mobId: string,
+	zoneId: string,
+	xpGained: number,
+	coinsGained: number,
+	drops: { LootDrop },
+	totalMobKills: number,
+}
+
+export type ChestErrorCode =
+	"INVALID_PLAYER"
+	| "PROFILE_NOT_LOADED"
+	| "CHARACTER_NOT_READY"
+	| "UNKNOWN_CHEST"
+	| "ZONE_LOCKED"
+	| "LEVEL_TOO_LOW"
+	| "OUT_OF_RANGE"
+	| "CHEST_COOLDOWN"
+	| "NOT_ENOUGH_KILLS"
+	| "REQUEST_IN_PROGRESS"
+
+export type ChestDef = {
+	id: string,
+	displayName: string,
+	zoneId: string,
+	position: Vector3,
+	interactionRadius: number,
+	minPlayerLevel: number,
+	cooldownSeconds: number,
+	requiredKillsSinceLastOpen: number,
+	lootTableId: string,
+}
+
+export type ChestStatePayload = {
+	chestId: string,
+	readyAtUnix: number,
+	requiredKills: number,
+	killsSinceLastOpen: number,
+	isReady: boolean,
+}
+
+export type ChestOpenResultPayload = {
+	ok: boolean,
+	chestId: string,
+	drops: { LootDrop },
+	state: ChestStatePayload?,
+	errorCode: ChestErrorCode?,
+	message: string,
+}
+
+export type SkillErrorCode =
+	"INVALID_PLAYER"
+	| "PROFILE_NOT_LOADED"
+	| "UNKNOWN_SKILL"
+	| "ALREADY_UNLOCKED"
+	| "PREREQUISITE_MISSING"
+	| "LEVEL_TOO_LOW"
+	| "NOT_ENOUGH_POINTS"
+	| "RATE_LIMITED"
+
+export type SkillNodeDef = {
+	id: string,
+	displayName: string,
+	branch: SkillBranch,
+	tier: number,
+	cost: number,
+	requiredLevel: number,
+	requires: { string },
+	bonuses: BodyStatBlock,
+	description: string,
+}
+
+export type SkillTreeStatePayload = {
+	unlocked: { [string]: boolean },
+	earnedPoints: number,
+	spentPoints: number,
+	availablePoints: number,
+}
+
+export type SkillUnlockResultPayload = {
+	ok: boolean,
+	skillId: string,
+	state: SkillTreeStatePayload,
+	errorCode: SkillErrorCode?,
+	message: string,
+}
+
+export type ArenaErrorCode =
+	"INVALID_PLAYER"
+	| "PROFILE_NOT_LOADED"
+	| "CHARACTER_NOT_READY"
+	| "PLAYER_DEAD"
+	| "NOT_AT_ARENA_ENTRANCE"
+	| "ALREADY_IN_ARENA"
+	| "NOT_IN_ARENA"
+	| "COMBAT_TAGGED"
+	| "LEVEL_TOO_LOW"
+	| "INVALID_TARGET"
+	| "SELF_TARGET"
+	| "TARGET_NOT_IN_ARENA"
+	| "OUT_OF_RANGE"
+	| "ATTACK_COOLDOWN"
+	| "RATE_LIMITED"
+
+export type ArenaStatePayload = {
+	inArena: boolean,
+	arenaId: string,
+	combatTaggedUntil: number,
+	reason: string?,
+	errorCode: ArenaErrorCode?,
+	message: string,
+}
+
+export type PvPCombatResultPayload = {
+	ok: boolean,
+	attackerUserId: number,
+	targetUserId: number,
+	damageDealt: number,
+	isCritical: boolean,
+	targetHealth: number,
+	targetMaxHealth: number,
+	killed: boolean,
+	errorCode: ArenaErrorCode?,
+	message: string,
 }
 
 export type PlayerProfileData = {

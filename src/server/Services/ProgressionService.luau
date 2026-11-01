@@ -2,7 +2,7 @@
 --[[
 	@module ProgressionService (Module 7: Progression)
 	@owner Agent A (Breight321)
-	@description Универсальная система прогрессии (XP, уровни, престиж/ребирты) и адаптер зон для EconomyService.
+	@description Универсальный сервис прогрессии (XP, уровни, ребирты/престиж, разблокировка зон) и адаптер зон для EconomyService.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21,6 +21,7 @@ local ProgressionService = {
 	Dependencies = { "PlayerDataService", "EconomyService" },
 	OnRebirth = Signal.new(),
 	OnZoneUnlocked = Signal.new(),
+	OnLevelUp = Signal.new(),
 }
 
 local log = Logger.new("ProgressionService")
@@ -191,7 +192,12 @@ function ProgressionService:UnlockZone(player: Player, zoneId: string): Types.Re
 	end
 
 	if zoneDef.costAmount > 0 then
-		local deductRes = economyService:RemoveCurrency(player, zoneDef.costCurrency, zoneDef.costAmount, "UnlockZone:" .. zoneId)
+		local deductRes = economyService:RemoveCurrency(
+			player,
+			zoneDef.costCurrency,
+			zoneDef.costAmount,
+			"UnlockZone:" .. zoneId
+		)
 		if not deductRes.ok then
 			if isRealPlayer(player) then
 				Network.FireClient(
@@ -240,10 +246,12 @@ function ProgressionService:AddXP(
 		return Types.Err("INVALID_XP_AMOUNT")
 	end
 
+	local oldLevel = 1
 	local newLevel = 1
 	local newXP = 0
 
-	playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
+	local updateRes = playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
+		oldLevel = profile.level
 		profile.xp += amount
 		local required = math.floor(
 			GameConfig.Progression.BaseXPToLevelUp
@@ -261,6 +269,14 @@ function ProgressionService:AddXP(
 		newXP = profile.xp
 		return true
 	end)
+
+	if not updateRes.ok then
+		return Types.Err(updateRes.error or "XP_UPDATE_FAILED")
+	end
+
+	if newLevel > oldLevel then
+		self.OnLevelUp:Fire(player, newLevel, oldLevel)
+	end
 
 	local prof = playerDataService:GetProfile(player).value
 	if prof and isRealPlayer(player) then
