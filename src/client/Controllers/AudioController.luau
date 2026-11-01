@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module AudioController
-	@owner Agent 2 (anarugod)
-	@description Управление звуковыми эффектами (SFX) и фоновой музыкой (BGM) на клиенте.
+	@owner Agent B (anarugod)
+	@description Универсальный модуль управления звуковыми эффектами (SFX) и фоновой музыкой (BGM) на клиенте. Поддерживает динамическую регистрацию звуков.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -11,6 +11,11 @@ local SoundService = game:GetService("SoundService")
 local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Logger = require(Shared:WaitForChild("Core"):WaitForChild("Logger"))
 local Signal = require(Shared:WaitForChild("Core"):WaitForChild("Signal"))
+
+export type SoundPreset = {
+	SoundId: string,
+	Volume: number,
+}
 
 local AudioController = {
 	Name = "AudioController",
@@ -22,7 +27,7 @@ local log = Logger.new("AudioController")
 local isMuted = false
 local activeMusicTrack: string? = nil
 
-local SOUND_PRESETS: { [string]: { SoundId: string, Volume: number } } = {
+local soundPresets: { [string]: SoundPreset } = {
 	Click = { SoundId = "rbxassetid://9119713951", Volume = 0.45 },
 	UIButton = { SoundId = "rbxassetid://6895079853", Volume = 0.35 },
 	Purchase = { SoundId = "rbxassetid://9118823108", Volume = 0.6 },
@@ -39,12 +44,26 @@ function AudioController:Start(): ()
 	log:Info("Started AudioController")
 end
 
+function AudioController:RegisterSound(soundName: string, soundId: string, volume: number?): ()
+	if type(soundName) ~= "string" or #soundName == 0 or type(soundId) ~= "string" then
+		return
+	end
+	soundPresets[soundName] = {
+		SoundId = soundId,
+		Volume = math.clamp(volume or 0.5, 0, 2),
+	}
+end
+
+function AudioController:GetSoundPreset(soundName: string): SoundPreset?
+	return soundPresets[soundName]
+end
+
 function AudioController:PlaySFX(soundName: string, pitchVariance: number?): ()
 	if isMuted then
 		return
 	end
 
-	local preset = SOUND_PRESETS[soundName]
+	local preset = soundPresets[soundName]
 	local sound = Instance.new("Sound")
 	sound.Name = "SFX_" .. soundName
 	sound.SoundId = if preset then preset.SoundId else "rbxassetid://6895079853"
