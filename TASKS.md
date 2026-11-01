@@ -10,7 +10,7 @@
 
 ---
 
-## 🚀 PHASE 1 — Joint Architecture & Project Initialization (Текущий этап)
+## 🚀 PHASE 1 — Joint Architecture & Project Initialization (Завершён)
 
 ### Общие задачи (Shared)
 - [x] **T1.1:** Первичный аудит GitHub-репозитория и веток
@@ -25,10 +25,10 @@
 - [x] **T1.8:** Обновление серверного Bootstrap (`src/server/init.server.luau`) и модульных тестов (`src/shared/Tests/FrameworkTests.luau`)
 
 ### Задачи AGENT 2 (`anarugod`)
-- [ ] **T1.9:** Аудит предложенной архитектуры и подтверждение клиентских контрактов в `API_REGISTRY.md`
-- [ ] **T1.10:** Подготовка структуры клиентских контроллеров (`UIController`, `InteractionController`, `WorldController`, `AudioController`, `AnimationController`) в `src/client/Controllers/`
-- [ ] **T1.11:** Подготовка базовой структуры `src/client/UI/Components/` и `src/client/World/` (`Zones`, `Items`)
-- [ ] **T1.12:** Проверка независимого запуска клиентского Bootstrap (`src/client/init.client.luau`) с использованием `Registry.luau`
+- [x] **T1.9:** Аудит предложенной архитектуры и подтверждение клиентских контрактов в `API_REGISTRY.md`
+- [x] **T1.10:** Подготовка структуры клиентских контроллеров (`UIController`, `InteractionController`, `WorldController`, `AudioController`, `AnimationController`) в `src/client/Controllers/`
+- [x] **T1.11:** Подготовка базовой структуры `src/client/UI/Components/` и `src/client/World/` (`Zones`, `Items`)
+- [x] **T1.12:** Проверка независимого запуска клиентского Bootstrap (`src/client/init.client.luau`) с использованием `Registry.luau`
 
 ---
 
