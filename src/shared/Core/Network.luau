@@ -2,7 +2,7 @@
 --[[
 	@module Network
 	@owner Agent A (Breight321) & Agent B (anarugod)
-	@description Единый типизированный сетевой слой поверх src/shared/Remotes.luau.
+	@description Универсальный типизированный сетевой слой поверх src/shared/Remotes.luau с поддержкой регистрации пользовательских событий.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -30,6 +30,15 @@ Network.Events = {
 	RequestUnlockZone = "RequestUnlockZone",
 	RequestClaimQuest = "RequestClaimQuest",
 }
+
+function Network.RegisterEvent(eventName: string): string
+	assert(type(eventName) == "string" and #eventName > 0, "eventName must be a non-empty string")
+	(Network.Events :: any)[eventName] = eventName
+	if RunService:IsServer() then
+		Remotes.getOrCreateEvent(eventName)
+	end
+	return eventName
+end
 
 function Network.BootstrapServer(): ()
 	if not RunService:IsServer() then

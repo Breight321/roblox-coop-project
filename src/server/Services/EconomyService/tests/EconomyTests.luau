@@ -2,7 +2,7 @@
 --[[
 	@module EconomyTests
 	@owner Agent A (Breight321)
-	@description Модульные и интеграционные тесты EconomyService + ShopService (валидация, лимиты, транзакции, защита от отрицательного баланса).
+	@description Модульные и интеграционные тесты универсального EconomyService и ShopService (изоляция, кастомные валюты, адаптеры множителей, транзакции).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -21,7 +21,36 @@ local ShopService = require(Services:WaitForChild("ShopService")) :: any
 local EconomyTests = {}
 
 function EconomyTests.RunAll(): TestRunner.TestSummary
-	return TestRunner.RunSuite("EconomyAndShopBackendSuite", {
+	return TestRunner.RunSuite("UniversalEconomyAndShopSuite", {
+		{
+			name = "EconomyService: Works independently with custom registered currency and multiplier modifier",
+			fn = function()
+				local mockPlayer = { Name = "TestPlayer_CustomCurr", UserId = 90010 } :: any
+				PlayerDataService:CreateSessionForTest(mockPlayer)
+
+				EconomyService:RegisterCurrency({
+					id = "RaceCredits",
+					displayName = "Race Credits",
+					startingAmount = 0,
+					maxAmount = 1e6,
+					showInLeaderstats = false,
+				})
+
+				EconomyService:RegisterMultiplierModifier("TestVIPBonus", function(_p: any, currId: string)
+					return if currId == "RaceCredits" then 2.5 else 1.0
+				end)
+
+				TestRunner.AssertEqual(EconomyService:GetMultiplier(mockPlayer, "RaceCredits"), 2.5, "Custom VIP multiplier")
+
+				local addRes = EconomyService:AddCurrency(mockPlayer, "RaceCredits", 400, "RaceWin")
+				TestRunner.AssertTrue(addRes.ok, "Add custom currency ok")
+				TestRunner.AssertEqual(EconomyService:GetBalance(mockPlayer, "RaceCredits"), 400, "RaceCredits balance")
+
+				EconomyService:RemoveMultiplierModifier("TestVIPBonus")
+				EconomyService:ClearPlayerState(mockPlayer)
+				PlayerDataService:RemoveSessionForTest(mockPlayer)
+			end,
+		},
 		{
 			name = "EconomyService: GetBalance, AddCurrency, RemoveCurrency and CanAfford work for multiple currencies",
 			fn = function()
@@ -67,7 +96,7 @@ function EconomyTests.RunAll(): TestRunner.TestSummary
 				local nanRes = EconomyService:AddCurrency(mockPlayer, "Coins", 0 / 0, "NaNAttempt")
 				TestRunner.AssertTrue(not nanRes.ok, "NaN add must fail")
 
-				local badCurr = EconomyService:AddCurrency(mockPlayer, "FakeCoin" :: any, 100, "BadCurrency")
+				local badCurr = EconomyService:AddCurrency(mockPlayer, "UnknownTokenXYZ", 100, "BadCurrency")
 				TestRunner.AssertTrue(not badCurr.ok, "Unknown currency must fail")
 				TestRunner.AssertEqual(badCurr.error, "UNKNOWN_CURRENCY", "Unknown currency error code")
 
@@ -86,19 +115,16 @@ function EconomyTests.RunAll(): TestRunner.TestSummary
 				local mockPlayer = { Name = "TestPlayer_Shop1", UserId = 90003 } :: any
 				PlayerDataService:CreateSessionForTest(mockPlayer)
 
-				-- 1. Try buying shop_iron_wand (costs 100 Coins) with 0 Coins -> INSUFFICIENT_FUNDS
 				local failBuy = ShopService:PurchaseItem(mockPlayer, "shop_iron_wand")
 				TestRunner.AssertTrue(not failBuy.ok, "Purchase without funds must fail")
 				TestRunner.AssertEqual(failBuy.error, "INSUFFICIENT_FUNDS", "Expected INSUFFICIENT_FUNDS")
 
-				-- 2. Grant 150 Coins and buy shop_iron_wand
 				EconomyService:AddCurrency(mockPlayer, "Coins", 150, "SetupShopTest")
 				local okBuy = ShopService:PurchaseItem(mockPlayer, "shop_iron_wand")
 				TestRunner.AssertTrue(okBuy.ok, "Purchase with funds must succeed")
 				TestRunner.AssertEqual(EconomyService:GetBalance(mockPlayer, "Coins"), 50, "100 Coins deducted")
 				TestRunner.AssertTrue(InventoryService:HasItemByTemplate(mockPlayer, "iron_wand"), "iron_wand granted to inventory")
 
-				-- 3. Buying the same Tool again should be rejected with ALREADY_OWNED
 				EconomyService:AddCurrency(mockPlayer, "Coins", 200, "TopUp")
 				local dupBuy = ShopService:PurchaseItem(mockPlayer, "shop_iron_wand")
 				TestRunner.AssertTrue(not dupBuy.ok, "Duplicate tool purchase must fail")

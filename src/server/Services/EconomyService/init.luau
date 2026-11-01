@@ -2,7 +2,7 @@
 --[[
 	@module EconomyService
 	@owner Agent A (Breight321)
-	@description Авторитетный серверный сервис экономики: баланс, начисление/списание, лимиты, аудит транзакций и обработка кликов.
+	@description Универсальный серверный модуль экономики (Модуль 4): мультивалютность, настраиваемые лимиты, адаптеры множителей и журнал транзакций. Не зависит от Inventory, Items или World.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -16,11 +16,11 @@ local Network = require(Shared:WaitForChild("Core"):WaitForChild("Network"))
 
 local GameConfig = require(Shared:WaitForChild("Config"):WaitForChild("GameConfig"))
 local CurrenciesConfig = require(Shared:WaitForChild("Config"):WaitForChild("CurrenciesConfig"))
-local ItemsConfig = require(Shared:WaitForChild("Config"):WaitForChild("ItemsConfig"))
-local ZonesConfig = require(Shared:WaitForChild("Config"):WaitForChild("ZonesConfig"))
 
 local EconomyTypes = require(script:WaitForChild("Types"))
 local EconomyConfig = require(script:WaitForChild("Config"))
+
+export type MultiplierModifierFn = (player: any, currencyId: EconomyTypes.CurrencyId) -> number
 
 local EconomyService = {
 	Name = "EconomyService",
@@ -33,7 +33,18 @@ local log = Logger.new("EconomyService")
 local playerDataService: any = nil
 local lastClickTimestamps: { [any]: number } = {}
 local transactionLogs: { [any]: { EconomyTypes.EconomyTransactionRecord } } = {}
+local registeredCurrencies: { [string]: SharedTypes.CurrencyDef } = {}
+local customLimitRules: { [string]: EconomyTypes.CurrencyLimitRule } = {}
+local multiplierModifiers: { [string]: MultiplierModifierFn } = {}
 local clickConn: RBXScriptConnection? = nil
+
+-- Инициализация базовых валют из конфига
+for currencyId, def in pairs(CurrenciesConfig) do
+	registeredCurrencies[currencyId] = def
+end
+for currencyId, rule in pairs(EconomyConfig.LimitsByCurrency) do
+	customLimitRules[currencyId] = rule
+end
 
 local function isValidPlayerKey(player: any): boolean
 	return player ~= nil and (typeof(player) == "Instance" or type(player) == "table")
@@ -52,18 +63,42 @@ local function isRealPlayer(player: any): boolean
 	return typeof(player) == "Instance" and player:IsA("Player")
 end
 
+function EconomyService:RegisterCurrency(
+	currencyDef: SharedTypes.CurrencyDef,
+	limitRule: EconomyTypes.CurrencyLimitRule?
+): ()
+	assert(type(currencyDef) == "table" and type(currencyDef.id) == "string", "Invalid CurrencyDef")
+	registeredCurrencies[currencyDef.id] = currencyDef
+	customLimitRules[currencyDef.id] = limitRule or {
+		minBalance = 0,
+		maxBalance = currencyDef.maxAmount or 1e15,
+		maxSingleTransaction = currencyDef.maxAmount or 1e12,
+		allowNegative = false,
+	}
+end
+
+function EconomyService:RegisterMultiplierModifier(modifierId: string, callback: MultiplierModifierFn): ()
+	assert(type(modifierId) == "string" and #modifierId > 0, "modifierId must be a non-empty string")
+	assert(type(callback) == "function", "callback must be a function")
+	multiplierModifiers[modifierId] = callback
+end
+
+function EconomyService:RemoveMultiplierModifier(modifierId: string): ()
+	multiplierModifiers[modifierId] = nil
+end
+
 function EconomyService:ValidateAmount(
 	currencyId: EconomyTypes.CurrencyId,
 	amount: any
 ): EconomyTypes.Result<number, EconomyTypes.EconomyErrorCode>
-	if type(currencyId) ~= "string" or CurrenciesConfig[currencyId] == nil then
+	if type(currencyId) ~= "string" or registeredCurrencies[currencyId] == nil then
 		return SharedTypes.Err("UNKNOWN_CURRENCY")
 	end
 	if type(amount) ~= "number" or amount ~= amount or amount <= 0 or amount == math.huge then
 		return SharedTypes.Err("INVALID_AMOUNT")
 	end
 
-	local limitRule = EconomyConfig.LimitsByCurrency[currencyId]
+	local limitRule = customLimitRules[currencyId]
 	if limitRule and amount > limitRule.maxSingleTransaction then
 		return SharedTypes.Err("AMOUNT_EXCEEDS_MAX_TRANSACTION")
 	end
@@ -115,7 +150,7 @@ end
 
 function EconomyService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
-	log:Info("Initialized EconomyService")
+	log:Info("Initialized universal EconomyService")
 end
 
 function EconomyService:Start(): ()
@@ -141,7 +176,7 @@ function EconomyService:CanAfford(player: Player, currencyId: EconomyTypes.Curre
 	if not isValidPlayerKey(player) then
 		return false
 	end
-	if type(currencyId) ~= "string" or CurrenciesConfig[currencyId] == nil then
+	if type(currencyId) ~= "string" or registeredCurrencies[currencyId] == nil then
 		return false
 	end
 	if type(amount) ~= "number" or amount ~= amount or amount < 0 or amount == math.huge then
@@ -159,6 +194,7 @@ function EconomyService:GetMultiplierBreakdown(
 		rebirthBonus = 1.0,
 		equippedItemsBonus = 1.0,
 		zoneBonus = 1.0,
+		customModifiersBonus = 1.0,
 		total = 1.0,
 	}
 
@@ -167,38 +203,32 @@ function EconomyService:GetMultiplierBreakdown(
 	end
 
 	local res = playerDataService:GetProfile(player)
-	if not res.ok or not res.value then
-		return breakdown
+	if res.ok and res.value then
+		local profile: SharedTypes.PlayerProfileData = res.value
+		local rebirths = profile.rebirths or 0
+		breakdown.rebirthBonus = 1.0 + (rebirths * GameConfig.Progression.RebirthBonusMultiplierPerRebirth)
 	end
 
-	local profile: SharedTypes.PlayerProfileData = res.value
-	breakdown.rebirthBonus = 1.0 + (profile.rebirths * GameConfig.Progression.RebirthBonusMultiplierPerRebirth)
-
-	if currencyId == "Coins" then
-		local itemsMult = 1.0
-		for _, item in pairs(profile.inventory) do
-			if item.equipped then
-				local def = ItemsConfig[item.itemId]
-				if def and def.coinMultiplier > 0 then
-					itemsMult *= def.coinMultiplier
-				end
+	local customTotal = 1.0
+	for modId, modFn in pairs(multiplierModifiers) do
+		local ok, factor = pcall(modFn, player, currencyId)
+		if ok and type(factor) == "number" and factor == factor and factor > 0 then
+			if modId == "EquippedItemsBonus" then
+				breakdown.equippedItemsBonus = factor
+			elseif modId == "ZoneBonus" then
+				breakdown.zoneBonus = factor
+			else
+				customTotal *= factor
 			end
 		end
-		breakdown.equippedItemsBonus = itemsMult
-
-		local bestZoneMult = 1.0
-		for zoneId, isUnlocked in pairs(profile.unlockedZones) do
-			if isUnlocked then
-				local zDef = ZonesConfig[zoneId]
-				if zDef and zDef.zoneMultiplier > bestZoneMult then
-					bestZoneMult = zDef.zoneMultiplier
-				end
-			end
-		end
-		breakdown.zoneBonus = bestZoneMult
 	end
+	breakdown.customModifiersBonus = customTotal
 
-	breakdown.total = breakdown.base * breakdown.rebirthBonus * breakdown.equippedItemsBonus * breakdown.zoneBonus
+	breakdown.total = breakdown.base
+		* breakdown.rebirthBonus
+		* breakdown.equippedItemsBonus
+		* breakdown.zoneBonus
+		* (breakdown.customModifiersBonus or 1.0)
 	return breakdown
 end
 
@@ -221,8 +251,8 @@ function EconomyService:AddCurrency(
 		return SharedTypes.Err((validRes.error :: any) or "INVALID_AMOUNT")
 	end
 	local cleanAmount = validRes.value
-	local def = CurrenciesConfig[currencyId]
-	local limitRule = EconomyConfig.LimitsByCurrency[currencyId]
+	local def = registeredCurrencies[currencyId]
+	local limitRule = customLimitRules[currencyId]
 	local maxCap = if limitRule then limitRule.maxBalance else def.maxAmount
 
 	local balanceBefore = 0
@@ -270,7 +300,7 @@ function EconomyService:RemoveCurrency(
 	end
 	local cleanAmount = validRes.value
 
-	local limitRule = EconomyConfig.LimitsByCurrency[currencyId]
+	local limitRule = customLimitRules[currencyId]
 	local allowNegative = if limitRule then limitRule.allowNegative else false
 	local minBalance = if limitRule then limitRule.minBalance else 0
 
@@ -327,14 +357,6 @@ function EconomyService:ProcessSimulatorClick(
 		return SharedTypes.Err("PROFILE_NOT_LOADED")
 	end
 
-	local verifiedToolUid: string? = nil
-	if type(clientToolUid) == "string" then
-		local item = profRes.value.inventory[clientToolUid]
-		if item and item.equipped and item.category == "Tool" then
-			verifiedToolUid = clientToolUid
-		end
-	end
-
 	local gain = math.max(1, math.floor(GameConfig.Simulator.BaseCoinsPerClick * self:GetMultiplier(player, "Coins")))
 
 	playerDataService:UpdateProfile(player, function(profile: SharedTypes.PlayerProfileData)
@@ -342,9 +364,9 @@ function EconomyService:ProcessSimulatorClick(
 		return false
 	end)
 
-	local addRes = self:AddCurrency(player, "Coins", gain, "SimulatorClick")
+	local addRes = self:AddCurrency(player, "Coins", gain, "PrimaryAction")
 	if addRes.ok then
-		self.OnSimulatorClickProcessed:Fire(player, gain, verifiedToolUid)
+		self.OnSimulatorClickProcessed:Fire(player, gain, clientToolUid)
 	end
 	return addRes
 end

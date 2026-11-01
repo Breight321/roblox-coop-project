@@ -1,8 +1,8 @@
 --!strict
 --[[
-	@module InventoryService
+	@module InventoryService (Module 5: Inventory)
 	@owner Agent A (Breight321)
-	@description Управление инвентарём игрока, проверка лимитов слотов, выдача предметов и экипировка.
+	@description Универсальная система инвентаря: хранение предметов, стекирование (quantity), настраиваемые лимиты слотов экипировки по категориям и опциональный адаптер для EconomyService.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -30,13 +30,48 @@ local playerDataService: any = nil
 local equipConn: RBXScriptConnection? = nil
 local lastEquipClock: { [any]: number } = {}
 
+-- Настраиваемые лимиты одновременной экипировки по любой категории предметов
+local categoryEquipLimits: { [string]: number } = {
+	Tool = 1,
+	Pet = GameConfig.Simulator.MaxEquippedPets,
+	Weapon = 1,
+	Armor = 1,
+}
+
 local function isRealPlayer(player: any): boolean
 	return typeof(player) == "Instance" and player:IsA("Player")
 end
 
+function InventoryService:SetCategoryEquipLimit(category: string, maxEquipped: number): ()
+	assert(type(category) == "string" and #category > 0, "category must be a non-empty string")
+	assert(type(maxEquipped) == "number" and maxEquipped >= 1, "maxEquipped must be >= 1")
+	categoryEquipLimits[category] = math.floor(maxEquipped)
+end
+
 function InventoryService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
-	log:Info("Initialized InventoryService")
+
+	-- Опциональная интеграция с EconomyService через публичный адаптер без жёсткой зависимости
+	local economyService = registry:TryGet("EconomyService")
+	if economyService and type(economyService.RegisterMultiplierModifier) == "function" then
+		economyService:RegisterMultiplierModifier("EquippedItemsBonus", function(player: any, currencyId: string)
+			if currencyId ~= "Coins" then
+				return 1.0
+			end
+			local itemsMult = 1.0
+			for _, item in pairs(self:GetInventory(player)) do
+				if item.equipped then
+					local def = ItemsConfig[item.itemId]
+					if def and def.coinMultiplier > 0 then
+						itemsMult *= def.coinMultiplier
+					end
+				end
+			end
+			return itemsMult
+		end)
+	end
+
+	log:Info("Initialized universal InventoryService")
 end
 
 function InventoryService:Start(): ()
@@ -69,13 +104,18 @@ function InventoryService:GetItem(player: Player, itemUid: string): Types.Invent
 	return inv[itemUid]
 end
 
-function InventoryService:HasItemByTemplate(player: Player, itemId: string): boolean
+function InventoryService:HasItemByTemplate(player: Player, itemId: string, minQuantity: number?): boolean
 	if type(itemId) ~= "string" then
 		return false
 	end
+	local requiredQty = minQuantity or 1
+	local totalQty = 0
 	for _, item in pairs(self:GetInventory(player)) do
 		if item.itemId == itemId then
-			return true
+			totalQty += (item.quantity or 1)
+			if totalQty >= requiredQty then
+				return true
+			end
 		end
 	end
 	return false
@@ -84,21 +124,30 @@ end
 function InventoryService:GetCapacityInfo(player: Player): Types.InventoryCapacityInfo
 	local usedSlots = 0
 	local equippedPets = 0
+	local equippedByCategory: { [string]: number } = {}
 	for _, item in pairs(self:GetInventory(player)) do
 		usedSlots += 1
-		if item.category == "Pet" and item.equipped then
-			equippedPets += 1
+		if item.equipped then
+			equippedByCategory[item.category] = (equippedByCategory[item.category] or 0) + 1
+			if item.category == "Pet" then
+				equippedPets += 1
+			end
 		end
 	end
 	return {
 		usedSlots = usedSlots,
 		maxSlots = GameConfig.Simulator.MaxInventorySlots,
 		equippedPetsCount = equippedPets,
-		maxEquippedPets = GameConfig.Simulator.MaxEquippedPets,
+		maxEquippedPets = categoryEquipLimits.Pet or GameConfig.Simulator.MaxEquippedPets,
+		equippedByCategory = equippedByCategory,
 	}
 end
 
-function InventoryService:GrantItem(player: Player, itemId: string): Types.Result<Types.InventoryItem, string>
+function InventoryService:GrantItem(
+	player: Player,
+	itemId: string,
+	quantity: number?
+): Types.Result<Types.InventoryItem, string>
 	if type(itemId) ~= "string" then
 		return Types.Err("UNKNOWN_ITEM_ID")
 	end
@@ -107,10 +156,23 @@ function InventoryService:GrantItem(player: Player, itemId: string): Types.Resul
 		return Types.Err("UNKNOWN_ITEM_ID")
 	end
 
+	local grantQty = if type(quantity) == "number" and quantity > 0 then math.floor(quantity) else 1
 	local grantedItem: Types.InventoryItem? = nil
 	local errReason: string? = nil
 
 	local updateRes = playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
+		-- Поддержка стекирования для stackable предметов
+		if def.stackable then
+			for _, existing in pairs(profile.inventory) do
+				if existing.itemId == itemId then
+					local maxStack = def.maxStack or 999
+					existing.quantity = math.min(maxStack, (existing.quantity or 1) + grantQty)
+					grantedItem = existing
+					return true
+				end
+			end
+		end
+
 		local count = 0
 		for _ in pairs(profile.inventory) do
 			count += 1
@@ -127,6 +189,7 @@ function InventoryService:GrantItem(player: Player, itemId: string): Types.Resul
 			category = def.category,
 			equipped = false,
 			level = 1,
+			quantity = grantQty,
 			acquiredAt = os.time(),
 		}
 		profile.inventory[uid] = newItem
@@ -189,22 +252,25 @@ function InventoryService:EquipItem(
 			return false
 		end
 
-		if equipped and item.category == "Tool" then
-			for _, other in pairs(profile.inventory) do
-				if other.category == "Tool" then
-					other.equipped = false
+		local categoryLimit = categoryEquipLimits[item.category] or 1
+		if equipped then
+			if categoryLimit == 1 then
+				for _, other in pairs(profile.inventory) do
+					if other.category == item.category then
+						other.equipped = false
+					end
 				end
-			end
-		elseif equipped and item.category == "Pet" then
-			local equippedPets = 0
-			for _, other in pairs(profile.inventory) do
-				if other.category == "Pet" and other.equipped and other.uid ~= itemUid then
-					equippedPets += 1
+			else
+				local currentEquipped = 0
+				for _, other in pairs(profile.inventory) do
+					if other.category == item.category and other.equipped and other.uid ~= itemUid then
+						currentEquipped += 1
+					end
 				end
-			end
-			if equippedPets >= GameConfig.Simulator.MaxEquippedPets then
-				errCode = "MAX_PETS_EQUIPPED"
-				return false
+				if currentEquipped >= categoryLimit then
+					errCode = if item.category == "Pet" then "MAX_PETS_EQUIPPED" else "MAX_CATEGORY_EQUIPPED"
+					return false
+				end
 			end
 		end
 
@@ -214,12 +280,12 @@ function InventoryService:EquipItem(
 	end)
 
 	if errCode then
-		if isRealPlayer(player) and errCode == "MAX_PETS_EQUIPPED" then
+		if isRealPlayer(player) then
 			Network.FireClient(
 				player,
 				Network.Events.Notification,
 				"Warning",
-				string.format("Maximum %d pets can be equipped!", GameConfig.Simulator.MaxEquippedPets)
+				"Maximum items of this category are already equipped!"
 			)
 		end
 		return Types.Err(errCode)

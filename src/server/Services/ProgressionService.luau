@@ -1,8 +1,8 @@
 --!strict
 --[[
-	@module ProgressionService
+	@module ProgressionService (Module 7: Progression)
 	@owner Agent A (Breight321)
-	@description Система уровней, опыта (XP), перерождений (Rebirths) и открытия зон с реактивной подпиской на клики.
+	@description Универсальная система прогрессии (XP, уровни, престиж/ребирты) и адаптер зон для EconomyService.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -36,6 +36,29 @@ end
 function ProgressionService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
 	economyService = registry:Get("EconomyService")
+
+	if economyService and type(economyService.RegisterMultiplierModifier) == "function" then
+		economyService:RegisterMultiplierModifier("ZoneBonus", function(player: any, currencyId: string)
+			if currencyId ~= "Coins" then
+				return 1.0
+			end
+			local profRes = playerDataService:GetProfile(player)
+			if not profRes.ok or not profRes.value then
+				return 1.0
+			end
+			local bestZoneMult = 1.0
+			for zoneId, isUnlocked in pairs(profRes.value.unlockedZones) do
+				if isUnlocked then
+					local zDef = ZonesConfig[zoneId]
+					if zDef and zDef.zoneMultiplier > bestZoneMult then
+						bestZoneMult = zDef.zoneMultiplier
+					end
+				end
+			end
+			return bestZoneMult
+		end)
+	end
+
 	log:Info("Initialized ProgressionService")
 end
 

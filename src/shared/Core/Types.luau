@@ -2,7 +2,7 @@
 --[[
 	@module Types
 	@owner Shared (Agent A: Breight321 & Agent B: anarugod)
-	@description Единые строгие Luau-типы для всех систем Roblox Simulator Framework.
+	@description Универсальные строгие Luau-типы и контракты для Universal Reusable Roblox Framework.
 ]]
 
 export type Result<T, E = string> = {
@@ -11,13 +11,12 @@ export type Result<T, E = string> = {
 	error: E?,
 }
 
-export type CurrencyId = "Coins" | "Gems"
+-- Универсальные идентификаторы (не привязаны к одной игре)
+export type CurrencyId = string
+export type ItemCategory = string
+export type ShopCategory = string
 
-export type ItemCategory = "Tool" | "Pet" | "Consumable"
-
-export type ShopCategory = "Tools" | "Pets" | "Boosts"
-
-export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary" | "Mythic"
+export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary" | "Mythic" | string
 
 export type CurrencyDef = {
 	id: CurrencyId,
@@ -32,9 +31,12 @@ export type ItemDef = {
 	displayName: string,
 	category: ItemCategory,
 	rarity: Rarity,
+	stackable: boolean?,
+	maxStack: number?,
 	powerMultiplier: number,
 	coinMultiplier: number,
 	description: string,
+	metadata: { [string]: any }?,
 }
 
 export type ZoneDef = {
@@ -45,6 +47,7 @@ export type ZoneDef = {
 	costAmount: number,
 	requiredRebirths: number,
 	zoneMultiplier: number,
+	requirements: { [string]: any }?,
 }
 
 export type ShopItemDef = {
@@ -55,6 +58,7 @@ export type ShopItemDef = {
 	price: number,
 	requiredZoneId: string?,
 	requiredRebirths: number?,
+	requirements: { [string]: any }?,
 }
 
 export type ShopPurchaseResponse = {
@@ -74,6 +78,7 @@ export type MultiplierBreakdown = {
 	rebirthBonus: number,
 	equippedItemsBonus: number,
 	zoneBonus: number,
+	customModifiersBonus: number?,
 	total: number,
 }
 
@@ -93,13 +98,14 @@ export type InventoryCapacityInfo = {
 	maxSlots: number,
 	equippedPetsCount: number,
 	maxEquippedPets: number,
+	equippedByCategory: { [string]: number }?,
 }
 
 export type QuestDef = {
 	id: string,
 	title: string,
 	description: string,
-	objectiveType: "Clicks" | "EarnCoins" | "Rebirths" | "UnlockZones",
+	objectiveType: string,
 	targetAmount: number,
 	rewardCurrency: CurrencyId,
 	rewardAmount: number,
@@ -112,7 +118,9 @@ export type InventoryItem = {
 	category: ItemCategory,
 	equipped: boolean,
 	level: number,
+	quantity: number?,
 	acquiredAt: number,
+	metadata: { [string]: any }?,
 }
 
 export type QuestState = {
@@ -127,6 +135,7 @@ export type PlayerStats = {
 	totalClicks: number,
 	totalCoinsEarned: number,
 	playTimeSeconds: number,
+	[string]: number,
 }
 
 export type PlayerProfileData = {
@@ -139,6 +148,7 @@ export type PlayerProfileData = {
 	inventory: { [string]: InventoryItem },
 	quests: { [string]: QuestState },
 	stats: PlayerStats,
+	customData: { [string]: any }?,
 }
 
 export type LifecycleModule = {

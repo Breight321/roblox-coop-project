@@ -1,8 +1,8 @@
 --!strict
 --[[
-	@module PlayerDataService
+	@module PlayerDataService (Module 3: Data)
 	@owner Agent A (Breight321)
-	@description Безопасное управление профилями игроков: конверт сессии, миграции, сверка с шаблоном, leaderstats и автосохранение.
+	@description Универсальный сервис профилей игроков: Session Locking, миграции, настраиваемые секции схемы (RegisterSchemaSection) и автосохранение.
 ]]
 
 local DataStoreService = game:GetService("DataStoreService")
@@ -33,10 +33,23 @@ local log = Logger.new("PlayerDataService")
 local profiles: { [any]: Types.PlayerProfileData } = {}
 local dirtyProfiles: { [any]: boolean } = {}
 local inMemoryStore: { [string]: any } = {}
+local customSchemaSections: { [string]: any } = {}
+local customMigrations: { [number]: (rawProfile: any) -> any } = {}
 local connections: { RBXScriptConnection } = {}
 local autoSaveThread: thread? = nil
 local liveDataStore: DataStore? = nil
 local useMockStore = true
+
+local function deepCopy(val: any): any
+	if type(val) ~= "table" then
+		return val
+	end
+	local copy = {}
+	for k, v in pairs(val) do
+		copy[deepCopy(k)] = deepCopy(v)
+	end
+	return copy
+end
 
 local function isRealPlayer(player: any): boolean
 	return typeof(player) == "Instance" and player:IsA("Player")
@@ -51,11 +64,22 @@ local function getStoreKey(player: any): string
 	return "UnknownPlayer"
 end
 
+function PlayerDataService:RegisterSchemaSection(sectionKey: string, defaultValue: any): ()
+	assert(type(sectionKey) == "string" and #sectionKey > 0, "sectionKey must be a non-empty string")
+	customSchemaSections[sectionKey] = deepCopy(defaultValue)
+end
+
+function PlayerDataService:RegisterMigration(fromVersion: number, migrateFn: (rawProfile: any) -> any): ()
+	assert(type(fromVersion) == "number" and fromVersion >= 1, "fromVersion must be >= 1")
+	assert(type(migrateFn) == "function", "migrateFn must be a function")
+	customMigrations[fromVersion] = migrateFn
+end
+
 function PlayerDataService:CreateDefaultProfile(): Types.PlayerProfileData
-	local currencies: { [Types.CurrencyId]: number } = {
-		Coins = CurrenciesConfig.Coins.startingAmount,
-		Gems = CurrenciesConfig.Gems.startingAmount,
-	}
+	local currencies: { [Types.CurrencyId]: number } = {}
+	for currId, def in pairs(CurrenciesConfig) do
+		currencies[currId] = def.startingAmount
+	end
 
 	local quests: { [string]: Types.QuestState } = {}
 	for questId, def in pairs(QuestsConfig) do
@@ -66,6 +90,11 @@ function PlayerDataService:CreateDefaultProfile(): Types.PlayerProfileData
 			completed = false,
 			claimed = false,
 		}
+	end
+
+	local customData: { [string]: any } = {}
+	for key, defaultVal in pairs(customSchemaSections) do
+		customData[key] = deepCopy(defaultVal)
 	end
 
 	return {
@@ -84,6 +113,7 @@ function PlayerDataService:CreateDefaultProfile(): Types.PlayerProfileData
 				category = "Tool",
 				equipped = true,
 				level = 1,
+				quantity = 1,
 				acquiredAt = os.time(),
 			},
 		},
@@ -93,6 +123,7 @@ function PlayerDataService:CreateDefaultProfile(): Types.PlayerProfileData
 			totalCoinsEarned = 0,
 			playTimeSeconds = 0,
 		},
+		customData = customData,
 	}
 end
 
@@ -102,12 +133,25 @@ function PlayerDataService:ReconcileAndSanitize(rawData: any): Types.PlayerProfi
 		return defaultProfile
 	end
 
-	-- Reconcile currencies
+	-- Run registered migrations if schemaVersion is older
+	local rawVersion = if type(rawData.schemaVersion) == "number" then rawData.schemaVersion else 1
+	while rawVersion < GameConfig.DataSchemaVersion do
+		local migrateFn = customMigrations[rawVersion]
+		if migrateFn then
+			local ok, migrated = pcall(migrateFn, rawData)
+			if ok and type(migrated) == "table" then
+				rawData = migrated
+			end
+		end
+		rawVersion += 1
+	end
+
 	if type(rawData.currencies) == "table" then
-		for currId, def in pairs(CurrenciesConfig) do
-			local val = rawData.currencies[currId]
-			if type(val) == "number" and val == val and val >= 0 then
-				defaultProfile.currencies[currId] = math.min(def.maxAmount, math.floor(val))
+		for currId, val in pairs(rawData.currencies) do
+			if type(currId) == "string" and type(val) == "number" and val == val and val >= 0 then
+				local def = CurrenciesConfig[currId]
+				local maxCap = if def then def.maxAmount else 1e15
+				defaultProfile.currencies[currId] = math.min(maxCap, math.floor(val))
 			end
 		end
 	end
@@ -139,7 +183,9 @@ function PlayerDataService:ReconcileAndSanitize(rawData: any): Types.PlayerProfi
 					category = item.category or "Tool",
 					equipped = item.equipped == true,
 					level = if type(item.level) == "number" then math.max(1, math.floor(item.level)) else 1,
+					quantity = if type(item.quantity) == "number" then math.max(1, math.floor(item.quantity)) else 1,
 					acquiredAt = if type(item.acquiredAt) == "number" then item.acquiredAt else os.time(),
+					metadata = if type(item.metadata) == "table" then deepCopy(item.metadata) else nil,
 				}
 			end
 		end
@@ -162,14 +208,18 @@ function PlayerDataService:ReconcileAndSanitize(rawData: any): Types.PlayerProfi
 	end
 
 	if type(rawData.stats) == "table" then
-		if type(rawData.stats.totalClicks) == "number" and rawData.stats.totalClicks >= 0 then
-			defaultProfile.stats.totalClicks = math.floor(rawData.stats.totalClicks)
+		for statKey, statVal in pairs(rawData.stats) do
+			if type(statKey) == "string" and type(statVal) == "number" and statVal == statVal and statVal >= 0 then
+				defaultProfile.stats[statKey] = math.floor(statVal)
+			end
 		end
-		if type(rawData.stats.totalCoinsEarned) == "number" and rawData.stats.totalCoinsEarned >= 0 then
-			defaultProfile.stats.totalCoinsEarned = math.floor(rawData.stats.totalCoinsEarned)
-		end
-		if type(rawData.stats.playTimeSeconds) == "number" and rawData.stats.playTimeSeconds >= 0 then
-			defaultProfile.stats.playTimeSeconds = math.floor(rawData.stats.playTimeSeconds)
+	end
+
+	if type(rawData.customData) == "table" and defaultProfile.customData then
+		for key, val in pairs(rawData.customData) do
+			if type(key) == "string" then
+				defaultProfile.customData[key] = deepCopy(val)
+			end
 		end
 	end
 
@@ -226,7 +276,7 @@ function PlayerDataService:Init(_registry: any): ()
 		useMockStore = true
 		log:Info("Running in unpublished Studio place; using safe InMemoryStore fallback.")
 	end
-	log:Info("Initialized PlayerDataService")
+	log:Info("Initialized universal PlayerDataService")
 end
 
 function PlayerDataService:_loadFromStore(player: any): Types.PlayerProfileData
@@ -298,7 +348,6 @@ function PlayerDataService:Start(): ()
 		dirtyProfiles[player] = false
 		syncLeaderstats(player, profile)
 		self.OnProfileLoaded:Fire(player, profile)
-		-- Передаём клиенту только чистый игровой профиль без метаданных конверта
 		Network.FireClient(player, Network.Events.PlayerDataSync, profile)
 		log:Info("Loaded profile for %s", player.Name)
 	end
