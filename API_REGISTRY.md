@@ -174,31 +174,53 @@ export type PlayerProfileData = {
 
 ## 4. Client Controllers API (`src/client/`) — *Владелец: Agent 2 (`anarugod`)*
 
-> Контракты для реализации и расширения **Agent 2 (`anarugod`)**.
+> Реализовано и поддерживается **Agent 2 (`anarugod`)**.
 
 ### 4.1 `UIController` (`src/client/Controllers/UIController.luau`)
-- **Dependencies:** `{ "AudioController" }`
+- **Dependencies:** `{ "AudioController", "AnimationController" }`
+- **UI Modules:** `src/client/UI/Theme.luau`, `HUDComponent.luau`, `WindowComponent.luau`, `NotificationComponent.luau`
 - **Public API:**
   - `OpenScreen(screenName: string): ()`
   - `CloseScreen(screenName: string): ()`
   - `ToggleScreen(screenName: string): ()`
+  - `GetActiveScreen(): string?`
   - `ShowNotification(notifType: string, message: string): ()`
+  - `GetClientState(): PlayerProfileData?`
 - **Events:**
   - `OnScreenChanged: Signal<string, boolean>`
+  - `OnStateUpdated: Signal<PlayerProfileData>`
+  - `OnCurrencyUpdated: Signal<CurrencyId, number, number>`
+  - `OnInventoryUpdated: Signal<{ [string]: InventoryItem }>`
+  - `OnProgressionUpdated: Signal<number, number, number, { [string]: boolean }>`
+  - `OnQuestUpdated: Signal<QuestState>`
+  - `OnPrimaryClickRequested: Signal<>`
 
 ### 4.2 `InteractionController` (`src/client/Controllers/InteractionController.luau`)
-- **Dependencies:** `{ "UIController", "AudioController", "AnimationController" }`
+- **Dependencies:** `{ "UIController", "WorldController", "AudioController", "AnimationController" }`
 - **Public API:**
-  - `TriggerPrimaryAction(): ()` — отправка `RequestActionClick` с кулдауном и запуском клиентских эффектов.
+  - `TriggerPrimaryAction(): Result<boolean, string>` — отправка `RequestActionClick` с проверкой кулдауна и запуском клиентских эффектов.
   - `SetInteractionEnabled(enabled: boolean): ()`
+  - `IsInteractionEnabled(): boolean`
+  - `RequestShopPurchase(shopItemId: string): ()`
+  - `RequestEquipItem(itemUid: string, equip: boolean): ()`
+  - `RequestRebirth(): ()`
+  - `RequestClaimQuest(questId: string): ()`
+- **Events:**
+  - `OnPrimaryActionTriggered: Signal<string?>`
 
 ### 4.3 `WorldController` (`src/client/Controllers/WorldController.luau`)
-- **Dependencies:** `{ "UIController" }`
+- **Dependencies:** `{ "UIController", "AudioController" }`
+- **World Modules:** `src/client/World/Zones/ZoneGateManager.luau`, `src/client/World/Items/ItemDisplayManager.luau`
 - **Public API:**
   - `SyncUnlockedZones(unlockedZones: { [string]: boolean }): ()`
+  - `RequestUnlockZone(zoneId: string): ()`
+  - `IsZoneUnlocked(zoneId: string): boolean`
+  - `SetCurrentZone(zoneId: string): ()`
   - `GetCurrentZone(): string`
+  - `GetEquippedToolUid(): string?`
 - **Events:**
   - `OnZoneEntered: Signal<string>`
+  - `OnZonesSynced: Signal<{ [string]: boolean }>`
 
 ### 4.4 `AudioController` (`src/client/Controllers/AudioController.luau`)
 - **Dependencies:** `{}`
@@ -206,9 +228,14 @@ export type PlayerProfileData = {
   - `PlaySFX(soundName: string, pitchVariance: number?): ()`
   - `PlayMusic(trackName: string): ()`
   - `SetMuted(muted: boolean): ()`
+  - `IsMuted(): boolean`
+  - `GetActiveMusicTrack(): string?`
+- **Events:**
+  - `OnMuteChanged: Signal<boolean>`
 
 ### 4.5 `AnimationController` (`src/client/Controllers/AnimationController.luau`)
 - **Dependencies:** `{}`
 - **Public API:**
   - `PlayActionAnimation(actionName: string): ()`
   - `PlayUIEffect(effectName: string, targetGui: GuiObject): ()`
+  - `GetLastActionAnimation(): string?`

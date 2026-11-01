@@ -121,6 +121,32 @@ function FrameworkTests.RunAll(): TestRunner.TestSummary
 				TestRunner.AssertTrue(ZonesConfig.spawn_meadow ~= nil, "spawn_meadow exists")
 			end,
 		},
+		{
+			name = "Client Controller DAG dependencies resolve without cycles",
+			fn = function()
+				local clientReg = Registry.new("Client")
+				clientReg:Register({ Name = "AudioController", Dependencies = {} })
+				clientReg:Register({ Name = "AnimationController", Dependencies = {} })
+				clientReg:Register({
+					Name = "UIController",
+					Dependencies = { "AudioController", "AnimationController" },
+				})
+				clientReg:Register({
+					Name = "WorldController",
+					Dependencies = { "UIController", "AudioController" },
+				})
+				clientReg:Register({
+					Name = "InteractionController",
+					Dependencies = { "UIController", "WorldController", "AudioController", "AnimationController" },
+				})
+
+				local initRes = clientReg:InitAll()
+				TestRunner.AssertTrue(initRes.ok, "Client DAG InitAll succeeded")
+				local startRes = clientReg:StartAll()
+				TestRunner.AssertTrue(startRes.ok, "Client DAG StartAll succeeded")
+				clientReg:ShutdownAll()
+			end,
+		},
 	})
 end
 

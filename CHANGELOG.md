@@ -22,6 +22,10 @@
   - Добавлены базовые конфигурации: `GameConfig.luau`, `CurrenciesConfig.luau`, `ItemsConfig.luau`, `ZonesConfig.luau`, `ShopConfig.luau`, `QuestsConfig.luau`.
 - **Server Services (`src/server/Services/` — Agent 1):**
   - Созданы базовые сервисы с согласованным API: `PlayerDataService`, `EconomyService`, `InventoryService`, `ProgressionService`, `ShopService`, `QuestService`.
+- **Client Controllers & UI/World Systems (`src/client/` — Agent 2):**
+  - Созданы клиентские контроллеры с DAG-зависимостями: `AudioController`, `AnimationController`, `UIController`, `WorldController`, `InteractionController`.
+  - Реализована модульная система интерфейса (`Theme.luau`, `HUDComponent.luau`, `WindowComponent.luau`, `NotificationComponent.luau`).
+  - Реализованы клиентские системы мира и зон (`ZoneGateManager.luau`, `ItemDisplayManager.luau`).
 - **Bootstrap & Tests:**
   - Обновлены `src/server/init.server.luau` и `src/client/init.client.luau` для работы через `Registry`.
   - Добавлен тестовый набор `src/shared/Tests/FrameworkTests.luau`.
