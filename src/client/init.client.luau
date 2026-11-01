@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module ClientBootstrap (init.client.luau)
-	@owner Agent 2 (anarugod) & Shared Bootstrap
-	@description Точка входа клиентской части фреймворка. Автоматически загружает контроллеры из папки Controllers.
+	@owner Agent B (anarugod) & Shared Bootstrap
+	@description Точка входа клиентской части фреймворка. Запускает клиентские тесты и автоматически загружает контроллеры из папки Controllers.
 ]]
 
 local Players = game:GetService("Players")
@@ -12,6 +12,7 @@ local Shared = ReplicatedStorage:WaitForChild("Shared")
 local Core = Shared:WaitForChild("Core")
 local Logger = require(Core:WaitForChild("Logger"))
 local Registry = require(Core:WaitForChild("Registry"))
+local TestRunner = require(Core:WaitForChild("TestRunner"))
 local GameConfig = require(Shared:WaitForChild("Config"):WaitForChild("GameConfig"))
 
 local log = Logger.new("ClientBootstrap")
@@ -20,8 +21,19 @@ local localPlayer = Players.LocalPlayer
 log:Info(
 	"Bootstrapping Roblox Simulator Framework v%s (Client) for %s...",
 	GameConfig.GameVersion,
-	localPlayer.Name
+	if localPlayer then localPlayer.Name else "LocalPlayer"
 )
+
+if GameConfig.RunTestsOnStartup then
+	local uiFolder = script:FindFirstChild("UI")
+	local shopUIFolder = if uiFolder then uiFolder:FindFirstChild("ShopUI") else nil
+	local testsFolder = if shopUIFolder then shopUIFolder:FindFirstChild("tests") else nil
+	local shopTestsMod = if testsFolder then testsFolder:FindFirstChild("ShopUITests") else nil
+	if shopTestsMod and shopTestsMod:IsA("ModuleScript") then
+		local shopUITests = require(shopTestsMod) :: any
+		TestRunner.RunSuite("ClientShopUISuite", shopUITests.GetTestCases())
+	end
+end
 
 local clientRegistry = Registry.new("Client")
 local controllersFolder = script:FindFirstChild("Controllers")
