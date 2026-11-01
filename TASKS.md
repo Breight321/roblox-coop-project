@@ -32,8 +32,8 @@
 
 ---
 
-## 🔜 PHASE 2 — Core Gameplay Loop & Client-Server Integration (Следующий этап)
+## 🔥 PHASE 2 — Core Gameplay Loop & Client-Server Integration (В работе / Завершение)
 - [ ] **T2.1 (Agent 1):** Полная реализация сохранения в `DataStoreService` с автосохранением и миграциями схем
-- [ ] **T2.2 (Agent 2):** Реализация главного HUD (отображение валют, кнопки Магазина, Инвентаря, Ребиртов, Квестов)
-- [ ] **T2.3 (Agent 1 & 2):** Сквозная интеграция клика симулятора (`InteractionController` -> `EconomyService` -> `UIController` + `AudioController` + `AnimationController`)
-- [ ] **T2.4 (Agent 1 & 2):** Сквозная интеграция открытия зон (`WorldController` <-> `ProgressionService`)
+- [x] **T2.2 (Agent 2):** Реализация главного HUD и экранов (`ShopView`, `InventoryView`, `QuestsView`, `RebirthView`)
+- [x] **T2.3 (Agent 1 & 2):** Сквозная интеграция клика симулятора (`InteractionController` -> `EconomyService` -> `UIController` + `AudioController` + `AnimationController`)
+- [x] **T2.4 (Agent 1 & 2):** Сквозная интеграция открытия зон (`WorldController` <-> `ProgressionService`)

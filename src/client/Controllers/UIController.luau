@@ -2,7 +2,7 @@
 --[[
 	@module UIController
 	@owner Agent 2 (anarugod)
-	@description Оркестратор пользовательского интерфейса: управление экранами, HUD, уведомлениями и реактивной синхронизацией с сервером.
+	@description Оркестратор пользовательского интерфейса: управление экранами, HUD, магазином, инвентарём, квестами, ребиртами и уведомлениями.
 ]]
 
 local Players = game:GetService("Players")
@@ -19,6 +19,10 @@ local ComponentsFolder = UIFolder:WaitForChild("Components")
 local HUDComponent = require(ComponentsFolder:WaitForChild("HUDComponent"))
 local WindowComponent = require(ComponentsFolder:WaitForChild("WindowComponent"))
 local NotificationComponent = require(ComponentsFolder:WaitForChild("NotificationComponent"))
+local ShopView = require(ComponentsFolder:WaitForChild("ShopView"))
+local InventoryView = require(ComponentsFolder:WaitForChild("InventoryView"))
+local QuestsView = require(ComponentsFolder:WaitForChild("QuestsView"))
+local RebirthView = require(ComponentsFolder:WaitForChild("RebirthView"))
 
 local UIController = {
 	Name = "UIController",
@@ -49,6 +53,41 @@ function UIController:Init(registry: any): ()
 	audioController = registry:Get("AudioController")
 	animationController = registry:Get("AnimationController")
 	log:Info("Initialized UIController")
+end
+
+function UIController:_refreshDynamicViews(): ()
+	if not cachedProfile then
+		return
+	end
+
+	local invWin = windows["Inventory"]
+	if invWin then
+		InventoryView.Render(invWin.Content, cachedProfile.inventory, function(itemUid: string, equip: boolean)
+			audioController:PlaySFX("UIButton")
+			Network.FireServer(Network.Events.RequestEquipItem, itemUid, equip)
+		end)
+	end
+
+	local questsWin = windows["Quests"]
+	if questsWin then
+		QuestsView.Render(questsWin.Content, cachedProfile.quests, function(questId: string)
+			audioController:PlaySFX("UIButton")
+			Network.FireServer(Network.Events.RequestClaimQuest, questId)
+		end)
+	end
+
+	local rebirthWin = windows["Rebirth"]
+	if rebirthWin then
+		RebirthView.Render(
+			rebirthWin.Content,
+			cachedProfile.rebirths,
+			cachedProfile.currencies.Coins or 0,
+			function()
+				audioController:PlaySFX("UIButton")
+				Network.FireServer(Network.Events.RequestRebirth)
+			end
+		)
+	end
 end
 
 function UIController:_mountInterface(): ()
@@ -94,6 +133,14 @@ function UIController:_mountInterface(): ()
 			self:CloseScreen(def.Name)
 		end)
 	end
+
+	local shopWin = windows["Shop"]
+	if shopWin then
+		ShopView.Populate(shopWin.Content, function(shopItemId: string)
+			audioController:PlaySFX("UIButton")
+			Network.FireServer(Network.Events.RequestShopPurchase, shopItemId)
+		end)
+	end
 end
 
 function UIController:Start(): ()
@@ -107,6 +154,7 @@ function UIController:Start(): ()
 				hudHandle:UpdateCurrencies(profile.currencies.Coins or 0, profile.currencies.Gems or 0)
 				hudHandle:UpdateProgression(profile.level, profile.xp, profile.rebirths)
 			end
+			self:_refreshDynamicViews()
 			self.OnStateUpdated:Fire(profile)
 		end)
 	)
@@ -122,6 +170,7 @@ function UIController:Start(): ()
 				if hudHandle and cachedProfile then
 					hudHandle:UpdateCurrencies(cachedProfile.currencies.Coins or 0, cachedProfile.currencies.Gems or 0)
 				end
+				self:_refreshDynamicViews()
 				self.OnCurrencyUpdated:Fire(currencyId, newBalance, delta)
 			end
 		)
@@ -135,6 +184,7 @@ function UIController:Start(): ()
 				if cachedProfile then
 					cachedProfile.inventory = inventory
 				end
+				self:_refreshDynamicViews()
 				self.OnInventoryUpdated:Fire(inventory)
 			end
 		)
@@ -154,6 +204,7 @@ function UIController:Start(): ()
 				if hudHandle then
 					hudHandle:UpdateProgression(level, xp, rebirths)
 				end
+				self:_refreshDynamicViews()
 				self.OnProgressionUpdated:Fire(level, xp, rebirths, unlockedZones)
 			end
 		)
@@ -165,6 +216,7 @@ function UIController:Start(): ()
 			if cachedProfile then
 				cachedProfile.quests[questState.questId] = questState
 			end
+			self:_refreshDynamicViews()
 			self.OnQuestUpdated:Fire(questState)
 		end)
 	)
@@ -183,6 +235,8 @@ function UIController:OpenScreen(screenName: string): ()
 	if activeScreen and activeScreen ~= screenName then
 		self:CloseScreen(activeScreen)
 	end
+
+	self:_refreshDynamicViews()
 
 	local win = windows[screenName]
 	if win then
