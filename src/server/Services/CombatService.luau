@@ -180,6 +180,7 @@ local function syncMobInstanceAttributes(mob: ActiveMobInstance): ()
 	part:SetAttribute("Level", mob.def.level)
 	part:SetAttribute("Health", mob.health)
 	part:SetAttribute("MaxHealth", mob.maxHealth)
+	part:SetAttribute("Alive", mob.isAlive)
 	part:SetAttribute("IsAlive", mob.isAlive)
 	part.Transparency = if mob.isAlive then 0.05 else 0.8
 	part.CanCollide = mob.isAlive
@@ -194,7 +195,7 @@ local function createMobWorldPart(mob: ActiveMobInstance): BasePart
 	part.Material = Enum.Material.SmoothPlastic
 	part.Color = if mob.def.zoneId == "spawn_meadow"
 		then Color3.fromRGB(165, 142, 115)
-		elseif mob.def.zoneId == "ember_woods" then Color3.fromRGB(235, 98, 48)
+		elseif mob.def.zoneId == "crystal_cavern" then Color3.fromRGB(235, 98, 48)
 		else Color3.fromRGB(92, 195, 255)
 	part.Size = if mob.def.level >= 5 then Vector3.new(6, 7, 6) else Vector3.new(4, 5, 4)
 	part.Position = mob.position + Vector3.new(0, part.Size.Y * 0.5, 0)
@@ -249,29 +250,30 @@ local function grantMobKillRewardsToPlayer(
 	end)
 
 	local def = mob.def
-	local xpAwarded = def.xpReward
-	local coinsAwarded = def.coinReward
+	local xpGained = def.rewardXP
+	local coinsGained = def.rewardCoins
 
-	if xpAwarded > 0 then
-		progressionService:AddXP(contributor, xpAwarded)
+	if xpGained > 0 then
+		progressionService:AddXP(contributor, xpGained)
 	end
-	if coinsAwarded > 0 then
-		economyService:AddCurrency(contributor, "Coins", coinsAwarded, "MobKill:" .. mob.mobId)
+	if coinsGained > 0 then
+		economyService:AddCurrency(contributor, "Coins", coinsGained, "MobKill:" .. mob.mobId)
 	end
 
-	local rng = customRng or defaultRng
-	local rolledDrops = lootService:RollLootTable(def.lootTableId, rng)
-	local grantedDrops = lootService:GrantDrops(contributor, rolledDrops, "MobLoot:" .. mob.mobId)
+	local grantedDrops: { Types.LootDrop } = {}
+	if type(def.lootTableId) == "string" and #def.lootTableId > 0 then
+		local rng = customRng or defaultRng
+		local rolledDrops = lootService:RollLootTable(def.lootTableId, rng)
+		grantedDrops = lootService:GrantDrops(contributor, rolledDrops, "MobLoot:" .. mob.mobId)
+	end
 
-	local refreshedProfile = unwrapProfile(contributor)
 	local payload: Types.MobDefeatedPayload = {
 		mobUid = mob.mobUid,
 		mobId = mob.mobId,
-		xpAwarded = xpAwarded,
-		coinsAwarded = coinsAwarded,
+		zoneId = def.zoneId,
+		xpGained = xpGained,
+		coinsGained = coinsGained,
 		drops = grantedDrops,
-		newLevel = if refreshedProfile then refreshedProfile.level else profile.level,
-		newXP = if refreshedProfile then refreshedProfile.xp else profile.xp,
 		totalMobKills = totalKills,
 	}
 
@@ -328,13 +330,13 @@ function CombatService:Start(): ()
 							local hasChar, isDead, plrPos = getPlayerCombatState(plr, mob.position)
 							if hasChar and not isDead and plrPos then
 								local dist = (plrPos - mob.position).Magnitude
-								if dist <= mob.def.attackRange then
+								if dist <= mob.def.aggroRange then
 									local character = plr.Character
 									local humanoid = if character then character:FindFirstChildOfClass("Humanoid") else nil
 									if humanoid and humanoid.Health > 0 then
 										mob.lastMobAttackAt = now
 										local pStats = statsService:GetStats(plr)
-										local dmg = statsService:ComputeMitigatedDamage(mob.def.damage, pStats.defense)
+										local dmg = statsService:ComputeMitigatedDamage(mob.def.attackDamage, pStats.defense)
 										humanoid:TakeDamage(dmg)
 										break
 									end
@@ -385,103 +387,101 @@ function CombatService:GetPlayerCombatRecord(player: any): { totalMobKills: numb
 end
 
 function CombatService:AttackMob(player: any, mobUid: string): Types.CombatResultPayload
-	local function fail(code: Types.CombatErrorCode, mobInst: ActiveMobInstance?): Types.CombatResultPayload
+	local function fail(code: Types.CombatErrorCode, msg: string, mobInst: ActiveMobInstance?): Types.CombatResultPayload
 		return {
 			ok = false,
-			errorCode = code,
 			mobUid = if mobInst then mobInst.mobUid else tostring(mobUid or ""),
-			mobId = if mobInst then mobInst.mobId else "",
 			damageDealt = 0,
-			isCrit = false,
-			mobRemainingHealth = if mobInst then mobInst.health else 0,
+			isCritical = false,
+			mobHealth = if mobInst then mobInst.health else 0,
 			mobMaxHealth = if mobInst then mobInst.maxHealth else 0,
-			defeated = false,
+			killed = false,
+			errorCode = code,
+			message = msg,
 		}
 	end
 
 	if not isValidPlayerKey(player) then
-		return fail("INVALID_PLAYER", nil)
+		return fail("INVALID_PLAYER", "Некорректный игрок.", nil)
 	end
 
 	local profile = unwrapProfile(player)
 	if not profile then
-		return fail("PROFILE_NOT_LOADED", nil)
+		return fail("PROFILE_NOT_LOADED", "Профиль ещё не загружен.", nil)
 	end
 
 	local arenaService = if serviceRegistry then serviceRegistry:TryGet("ArenaService") else nil
 	if arenaService and arenaService:IsInArena(player) then
-		return fail("IN_ARENA", nil)
+		return fail("IN_ARENA", "Нельзя атаковать PvE-мобов внутри PvP-арены.", nil)
 	end
 
 	if type(mobUid) ~= "string" or activeMobs[mobUid] == nil then
-		return fail("INVALID_TARGET", nil)
+		return fail("INVALID_TARGET", "Цель не найдена.", nil)
 	end
 
 	local mob = activeMobs[mobUid]
 	if not mob.isAlive or mob.health <= 0 then
-		return fail("TARGET_DEAD", mob)
+		return fail("TARGET_DEAD", "Этот противник уже повержен.", mob)
 	end
 
 	local hasChar, isDead, playerPos = getPlayerCombatState(player, mob.position)
 	if not hasChar or not playerPos then
-		return fail("CHARACTER_NOT_READY", mob)
+		return fail("CHARACTER_NOT_READY", "Персонаж не готов.", mob)
 	end
 	if isDead then
-		return fail("PLAYER_DEAD", mob)
+		return fail("PLAYER_DEAD", "Персонаж повержен.", mob)
 	end
 
-	local zoneRule = CombatConfig.ZoneRules[mob.def.zoneId]
-	if zoneRule then
-		if zoneRule.requireUnlockedZone and not profile.unlockedZones[mob.def.zoneId] then
-			return fail("ZONE_LOCKED", mob)
-		end
-		if profile.level < zoneRule.minPlayerLevel then
-			return fail("LEVEL_TOO_LOW", mob)
-		end
+	local zoneId = mob.def.zoneId
+	if zoneId ~= "spawn_meadow" and not profile.unlockedZones[zoneId] then
+		return fail("ZONE_LOCKED", "Зона с этим мобом ещё не разблокирована.", mob)
 	end
 
-	local maxAllowedRange = math.max(mob.def.attackRange, CombatConfig.DefaultMeleeRange)
+	local zoneRule = CombatConfig.ZoneRules[zoneId]
+	if zoneRule and profile.level < zoneRule.minPlayerLevel then
+		return fail("LEVEL_TOO_LOW", string.format("Требуется уровень %d для боя в этой зоне.", zoneRule.minPlayerLevel), mob)
+	end
+
+	local maxAllowedRange = math.max(mob.def.aggroRange, CombatConfig.MeleeRange)
 	local dist = (playerPos - mob.position).Magnitude
 	if dist > maxAllowedRange then
-		return fail("OUT_OF_RANGE", mob)
+		return fail("OUT_OF_RANGE", "Слишком далеко от цели.", mob)
 	end
 
 	local pStats = statsService:GetStats(player)
 	local now = os.clock()
 	local prevAttack = lastAttackTime[player] or 0
 	if (now - prevAttack) < pStats.attackCooldown then
-		return fail("ATTACK_COOLDOWN", mob)
+		return fail("ATTACK_COOLDOWN", "Оружие перезаряжается.", mob)
 	end
 	lastAttackTime[player] = now
 
 	local rng = customRng or defaultRng
-	local isCrit = rng:NextNumber() < pStats.critChance
-	local rawDamage = pStats.damage
-	if isCrit then
+	local isCritical = rng:NextNumber() < pStats.critChance
+	local rawDamage = pStats.attackPower
+	if isCritical then
 		rawDamage = math.floor(rawDamage * pStats.critMultiplier + 0.5)
 	end
-	local finalDamage = statsService:ComputeMitigatedDamage(rawDamage, mob.def.defense)
+	local finalDamage = math.max(1, rawDamage)
 
 	mob.health = math.max(0, mob.health - finalDamage)
 	mob.damageByPlayer[player] = (mob.damageByPlayer[player] or 0) + finalDamage
 
-	local defeated = mob.health <= 0
-	if defeated then
+	local killed = mob.health <= 0
+	if killed then
 		mob.isAlive = false
 	end
 
 	syncMobInstanceAttributes(mob)
-	self.OnMobDamaged:Fire(player, mob, finalDamage, isCrit)
+	self.OnMobDamaged:Fire(player, mob, finalDamage, isCritical)
 
-	if defeated then
-		local minContrib = mob.maxHealth * CombatConfig.MinContributionRatioForRewards
+	if killed then
+		local minContrib = mob.maxHealth * CombatConfig.RewardContributionThreshold
 		local rewardedPlayers: { [any]: boolean } = {}
 
-		-- Всегда вознаграждаем игрока, нанёсшего добивающий удар
 		rewardedPlayers[player] = true
 		grantMobKillRewardsToPlayer(player, mob)
 
-		-- А также всех помощников, нанёсших >= 15% здоровья моба
 		for contributor, dmgDone in pairs(mob.damageByPlayer) do
 			if not rewardedPlayers[contributor] and dmgDone >= minContrib then
 				rewardedPlayers[contributor] = true
@@ -506,14 +506,14 @@ function CombatService:AttackMob(player: any, mobUid: string): Types.CombatResul
 
 	return {
 		ok = true,
-		errorCode = nil,
 		mobUid = mob.mobUid,
-		mobId = mob.mobId,
 		damageDealt = finalDamage,
-		isCrit = isCrit,
-		mobRemainingHealth = mob.health,
+		isCritical = isCritical,
+		mobHealth = mob.health,
 		mobMaxHealth = mob.maxHealth,
-		defeated = defeated,
+		killed = killed,
+		errorCode = nil,
+		message = if killed then string.format("%s повержен!", mob.def.displayName) else "Удар нанесён.",
 	}
 end
 

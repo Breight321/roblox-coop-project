@@ -36,13 +36,13 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 			name = "CombatService: validates range, zone lock, cooldown, mob kill, XP and Coins rewards",
 			fn = function()
 				CombatService:SetRngForTests(Random.new(12345))
-				local mobPos = Vector3.new(25, 0, -25)
-				local testMobUid = CombatService:SpawnMobForTest("meadow_slime", mobPos)
-				TestRunner.Assert(testMobUid ~= nil, "Should spawn test meadow_slime")
+				local mobPos = Vector3.new(-28, 3, -10)
+				local testMobUid = CombatService:SpawnMobForTest("meadow_scrap_drone", mobPos)
+				TestRunner.Assert(testMobUid ~= nil, "Should spawn test meadow_scrap_drone")
 				local mobUid = testMobUid :: string
 
-				local lockedMobPos = Vector3.new(150, 0, -25)
-				local lockedMobUid = CombatService:SpawnMobForTest("ember_hound", lockedMobPos) :: string
+				local lockedMobPos = Vector3.new(28, 3, -12)
+				local lockedMobUid = CombatService:SpawnMobForTest("cavern_ember_golem", lockedMobPos) :: string
 
 				local mockPlayer: any = {
 					UserId = 992001,
@@ -56,13 +56,13 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 				TestRunner.Assert(not farRes.ok, "Attack from 100 studs should fail")
 				TestRunner.AssertEqual(farRes.errorCode, "OUT_OF_RANGE", "Expected OUT_OF_RANGE")
 
-				-- 2. Попытка атаковать моба в закрытой зоне (ember_woods) -> ZONE_LOCKED
+				-- 2. Попытка атаковать моба в закрытой зоне (crystal_cavern) -> ZONE_LOCKED
 				mockPlayer.Position = lockedMobPos
 				local zoneRes = CombatService:AttackMob(mockPlayer, lockedMobUid)
 				TestRunner.Assert(not zoneRes.ok, "Attack in locked zone should fail")
 				TestRunner.AssertEqual(zoneRes.errorCode, "ZONE_LOCKED", "Expected ZONE_LOCKED")
 
-				-- 3. Подходим к meadow_slime и наносим первый удар
+				-- 3. Подходим к meadow_scrap_drone и наносим первый удар
 				mockPlayer.Position = mobPos + Vector3.new(4, 0, 0)
 				local hit1 = CombatService:AttackMob(mockPlayer, mobUid)
 				TestRunner.Assert(hit1.ok, "Valid attack in range should succeed")
@@ -75,16 +75,16 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				-- 5. Добиваем моба и проверяем начисление XP, Coins и счётчика побед
 				local startCoins = EconomyService:GetBalance(mockPlayer, "Coins")
-				local defeated = hit1.defeated
+				local killed = hit1.killed
 				local safety = 0
-				while not defeated and safety < 20 do
+				while not killed and safety < 20 do
 					safety += 1
 					CombatService:ClearCooldownForTest(mockPlayer)
 					local step = CombatService:AttackMob(mockPlayer, mobUid)
 					TestRunner.Assert(step.ok, "Subsequent attack after cooldown clear should succeed")
-					defeated = step.defeated
+					killed = step.killed
 				end
-				TestRunner.Assert(defeated, "Mob must be defeated within expected hits")
+				TestRunner.Assert(killed, "Mob must be defeated within expected hits")
 
 				-- 6. Попытка ударить уже побеждённого моба -> TARGET_DEAD
 				CombatService:ClearCooldownForTest(mockPlayer)
@@ -97,7 +97,7 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				local record = CombatService:GetPlayerCombatRecord(mockPlayer)
 				TestRunner.AssertEqual(record.totalMobKills, 1, "totalMobKills should increment to 1")
-				TestRunner.AssertEqual(record.mobKillsById.meadow_slime, 1, "meadow_slime kill count should be 1")
+				TestRunner.AssertEqual(record.mobKillsById.meadow_scrap_drone, 1, "meadow_scrap_drone kill count should be 1")
 
 				CombatService:DespawnMobForTest(mobUid)
 				CombatService:DespawnMobForTest(lockedMobUid)
@@ -115,15 +115,15 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 				PlayerDataService:CreateSessionForTest(mockPlayer)
 
 				local baseStats = StatsService:GetStats(mockPlayer)
-				local baseDamage = baseStats.damage
+				local baseAttackPower = baseStats.attackPower
 				local baseMaxHealth = baseStats.maxHealth
 
 				-- Выдаём 4 детали комплекта Scrapper и 1 шлем комплекта Ember
-				local headRes = InventoryService:GrantItem(mockPlayer, "body_head_scrapper", 1)
-				local armsRes = InventoryService:GrantItem(mockPlayer, "body_arms_scrapper", 1)
-				local torsoRes = InventoryService:GrantItem(mockPlayer, "body_torso_scrapper", 1)
-				local legsRes = InventoryService:GrantItem(mockPlayer, "body_legs_scrapper", 1)
-				local emberHeadRes = InventoryService:GrantItem(mockPlayer, "body_head_ember", 1)
+				local headRes = InventoryService:GrantItem(mockPlayer, "scrap_head", 1)
+				local armsRes = InventoryService:GrantItem(mockPlayer, "scrap_arms", 1)
+				local torsoRes = InventoryService:GrantItem(mockPlayer, "scrap_torso", 1)
+				local legsRes = InventoryService:GrantItem(mockPlayer, "scrap_legs", 1)
+				local emberHeadRes = InventoryService:GrantItem(mockPlayer, "ember_head", 1)
 
 				TestRunner.Assert(headRes.ok and armsRes.ok and torsoRes.ok and legsRes.ok and emberHeadRes.ok, "All body parts should be granted")
 
@@ -140,8 +140,8 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 				TestRunner.Assert(InventoryService:EquipItem(mockPlayer, legsUid, true).ok, "Should equip Legs")
 
 				local fullSetStats = StatsService:GetStats(mockPlayer)
-				TestRunner.AssertEqual(fullSetStats.activeSetBonusId, "scrapper", "4 pieces of scrapper must activate 'scrapper' set bonus")
-				TestRunner.Assert(fullSetStats.damage > baseDamage, "Damage should increase with equipped body parts + set bonus")
+				TestRunner.AssertEqual(fullSetStats.activeSetBonus, "scrapper", "4 pieces of scrapper must activate 'scrapper' set bonus")
+				TestRunner.Assert(fullSetStats.attackPower > baseAttackPower, "AttackPower should increase with equipped body parts + set bonus")
 				TestRunner.Assert(fullSetStats.maxHealth > baseMaxHealth, "MaxHealth should increase with equipped body parts + set bonus")
 
 				-- Проверяем ограничение 1 предмета на слот BodyHead: попытка надеть второй шлем поверх первого без снятия -> CATEGORY_EQUIP_LIMIT_REACHED
@@ -154,9 +154,9 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 				TestRunner.Assert(InventoryService:EquipItem(mockPlayer, emberHeadUid, true).ok, "Should equip Ember Head")
 
 				local mixedStats = StatsService:GetStats(mockPlayer)
-				TestRunner.AssertEqual(mixedStats.activeSetBonusId, nil, "3/4 scrapper + 1/4 ember must not have fullSetBonus")
-				TestRunner.AssertEqual(mixedStats.equippedBodyParts.Head, "body_head_ember", "Head slot should now report body_head_ember")
-				TestRunner.AssertEqual(mixedStats.equippedBodyParts.Arms, "body_arms_scrapper", "Arms slot should keep body_arms_scrapper")
+				TestRunner.AssertEqual(mixedStats.activeSetBonus, nil, "3/4 scrapper + 1/4 ember must not have fullSetBonus")
+				TestRunner.AssertEqual(mixedStats.equippedBodyParts.Head, "ember_head", "Head slot should now report ember_head")
+				TestRunner.AssertEqual(mixedStats.equippedBodyParts.Arms, "scrap_arms", "Arms slot should keep scrap_arms")
 
 				PlayerDataService:RemoveSessionForTest(mockPlayer)
 			end,
@@ -169,8 +169,8 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 					return fakeNow
 				end)
 
-				local chestDef = CombatConfig.Chests.meadow_supply_chest
-				local mobPos = Vector3.new(25, 0, -25)
+				local chestDef = CombatConfig.Chests.meadow_supply_cache
+				local mobPos = Vector3.new(-28, 3, -10)
 				local mockPlayer: any = {
 					UserId = 992003,
 					Name = "ChestTester",
@@ -179,20 +179,20 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 				PlayerDataService:CreateSessionForTest(mockPlayer)
 
 				-- 1. Попытка открыть сундук сразу без убийства мобов -> NOT_ENOUGH_KILLS
-				local noKillsRes = ChestService:OpenChest(mockPlayer, "meadow_supply_chest")
+				local noKillsRes = ChestService:OpenChest(mockPlayer, "meadow_supply_cache")
 				TestRunner.Assert(not noKillsRes.ok, "Opening chest with 0 kills must fail")
 				TestRunner.AssertEqual(noKillsRes.errorCode, "NOT_ENOUGH_KILLS", "Expected NOT_ENOUGH_KILLS")
 
-				-- 2. Побеждаем 2 мобов (requiredKillsSinceLastOpen = 2 для meadow_supply_chest)
+				-- 2. Побеждаем 2 мобов (requiredKillsSinceLastOpen = 2 для meadow_supply_cache)
 				for _ = 1, chestDef.requiredKillsSinceLastOpen do
-					local mUid = CombatService:SpawnMobForTest("meadow_slime", mobPos) :: string
+					local mUid = CombatService:SpawnMobForTest("meadow_scrap_drone", mobPos) :: string
 					mockPlayer.Position = mobPos
 					local safety = 0
 					while safety < 20 do
 						safety += 1
 						CombatService:ClearCooldownForTest(mockPlayer)
 						local r = CombatService:AttackMob(mockPlayer, mUid)
-						if r.defeated then
+						if r.killed then
 							break
 						end
 					end
@@ -201,24 +201,24 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				-- 3. Слишком далеко от сундука -> OUT_OF_RANGE
 				mockPlayer.Position = chestDef.position + Vector3.new(80, 0, 0)
-				local farRes = ChestService:OpenChest(mockPlayer, "meadow_supply_chest")
+				local farRes = ChestService:OpenChest(mockPlayer, "meadow_supply_cache")
 				TestRunner.Assert(not farRes.ok, "Opening chest from afar must fail")
 				TestRunner.AssertEqual(farRes.errorCode, "OUT_OF_RANGE", "Expected OUT_OF_RANGE")
 
 				-- 4. Подходим к сундуку и успешно открываем
 				mockPlayer.Position = chestDef.position
-				local openRes = ChestService:OpenChest(mockPlayer, "meadow_supply_chest")
+				local openRes = ChestService:OpenChest(mockPlayer, "meadow_supply_cache")
 				TestRunner.Assert(openRes.ok, "Opening chest after required kills and in range should succeed")
 				TestRunner.Assert(#openRes.drops > 0, "Chest must grant loot drops")
 
 				-- 5. Повторное открытие сразу -> CHEST_COOLDOWN
-				local cdRes = ChestService:OpenChest(mockPlayer, "meadow_supply_chest")
+				local cdRes = ChestService:OpenChest(mockPlayer, "meadow_supply_cache")
 				TestRunner.Assert(not cdRes.ok, "Immediate second open must fail with CHEST_COOLDOWN")
 				TestRunner.AssertEqual(cdRes.errorCode, "CHEST_COOLDOWN", "Expected CHEST_COOLDOWN")
 
 				-- 6. Даже после истечения времени кулдауна сундук снова требует убить 2 мобов -> NOT_ENOUGH_KILLS
 				fakeNow += chestDef.cooldownSeconds + 5
-				local afterCdNoKills = ChestService:OpenChest(mockPlayer, "meadow_supply_chest")
+				local afterCdNoKills = ChestService:OpenChest(mockPlayer, "meadow_supply_cache")
 				TestRunner.Assert(not afterCdNoKills.ok, "After cooldown expires, chest still requires new mob kills")
 				TestRunner.AssertEqual(afterCdNoKills.errorCode, "NOT_ENOUGH_KILLS", "Expected NOT_ENOUGH_KILLS")
 
@@ -237,34 +237,34 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				local initStats = StatsService:GetStats(mockPlayer)
 
-				-- 1. Попытка открыть узел 2-го тира (dmg_2) без открытого dmg_1 -> PREREQUISITE_LOCKED
+				-- 1. Попытка открыть узел 2-го тира (dmg_2) без открытого dmg_1 -> PREREQUISITE_MISSING
 				local prereqRes = SkillTreeService:UnlockSkill(mockPlayer, "dmg_2")
 				TestRunner.Assert(not prereqRes.ok, "Unlocking tier 2 without tier 1 must fail")
-				TestRunner.AssertEqual(prereqRes.errorCode, "PREREQUISITE_LOCKED", "Expected PREREQUISITE_LOCKED")
+				TestRunner.AssertEqual(prereqRes.errorCode, "PREREQUISITE_MISSING", "Expected PREREQUISITE_MISSING")
 
 				-- 2. Открываем базовый навык урона dmg_1 за стартовое очко навыков
 				local unlock1 = SkillTreeService:UnlockSkill(mockPlayer, "dmg_1")
 				TestRunner.Assert(unlock1.ok, "Unlocking dmg_1 at level 1 with 1 starting point should succeed")
-				TestRunner.AssertEqual(unlock1.availablePoints, 0, "Should have 0 available points left")
+				TestRunner.AssertEqual(unlock1.state.availablePoints, 0, "Should have 0 available points left")
 
 				local afterDmg1Stats = StatsService:GetStats(mockPlayer)
-				TestRunner.AssertEqual(afterDmg1Stats.damage, initStats.damage + 4, "dmg_1 should add +4 damage")
+				TestRunner.AssertEqual(afterDmg1Stats.attackPower, initStats.attackPower + 4, "dmg_1 should add +4 attackPower")
 
-				-- 3. Попытка открыть def_1 без очков навыков -> INSUFFICIENT_SKILL_POINTS
+				-- 3. Попытка открыть def_1 без очков навыков -> NOT_ENOUGH_POINTS
 				local noPtsRes = SkillTreeService:UnlockSkill(mockPlayer, "def_1")
 				TestRunner.Assert(not noPtsRes.ok, "Unlocking without points must fail")
-				TestRunner.AssertEqual(noPtsRes.errorCode, "INSUFFICIENT_SKILL_POINTS", "Expected INSUFFICIENT_SKILL_POINTS")
+				TestRunner.AssertEqual(noPtsRes.errorCode, "NOT_ENOUGH_POINTS", "Expected NOT_ENOUGH_POINTS")
 
 				-- 4. Попытка открыть dmg_2 на 1-м уровне (даже если выдать очки) -> LEVEL_TOO_LOW
 				SkillTreeService:GrantPointsForTest(mockPlayer, 2)
 				local lowLvlRes = SkillTreeService:UnlockSkill(mockPlayer, "dmg_2")
-				TestRunner.Assert(not lowLvlRes.ok, "Unlocking dmg_2 below level 3 must fail")
+				TestRunner.Assert(not lowLvlRes.ok, "Unlocking dmg_2 below level 2 must fail")
 				TestRunner.AssertEqual(lowLvlRes.errorCode, "LEVEL_TOO_LOW", "Expected LEVEL_TOO_LOW")
 
-				-- 5. Повышаем уровень до 3 через ProgressionService:AddXP и открываем dmg_2
-				ProgressionService:AddXP(mockPlayer, 500)
+				-- 5. Повышаем уровень до 2 через ProgressionService:AddXP и открываем dmg_2
+				ProgressionService:AddXP(mockPlayer, 200)
 				local unlock2 = SkillTreeService:UnlockSkill(mockPlayer, "dmg_2")
-				TestRunner.Assert(unlock2.ok, "Unlocking dmg_2 at level >= 3 should succeed")
+				TestRunner.Assert(unlock2.ok, "Unlocking dmg_2 at level >= 2 should succeed")
 
 				PlayerDataService:RemoveSessionForTest(mockPlayer)
 			end,
@@ -299,14 +299,14 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				-- 2. Игрок 1 входит в арену, но Игрок 2 ещё в мирной зоне -> TARGET_NOT_IN_ARENA
 				local enter1 = ArenaService:EnterArena(p1)
-				TestRunner.Assert(enter1.ok and enter1.inArena, "Player 1 should enter arena")
+				TestRunner.Assert(enter1.inArena and enter1.errorCode == nil, "Player 1 should enter arena")
 
 				local hitOutsideTarget = ArenaService:AttackPlayer(p1, p2.UserId)
 				TestRunner.Assert(not hitOutsideTarget.ok, "Attacking player outside arena must fail")
 				TestRunner.AssertEqual(hitOutsideTarget.errorCode, "TARGET_NOT_IN_ARENA", "Expected TARGET_NOT_IN_ARENA")
 
 				-- 3. Находясь в арене, нельзя бить PvE-мобов -> IN_ARENA
-				local mobUid = CombatService:SpawnMobForTest("meadow_slime", p1.Position) :: string
+				local mobUid = CombatService:SpawnMobForTest("meadow_scrap_drone", p1.Position) :: string
 				local pveAttempt = CombatService:AttackMob(p1, mobUid)
 				TestRunner.Assert(not pveAttempt.ok, "Attacking PvE mob while in PvP arena must fail")
 				TestRunner.AssertEqual(pveAttempt.errorCode, "IN_ARENA", "Expected IN_ARENA")
@@ -314,7 +314,7 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				-- 4. Игрок 2 также добровольно входит в арену; сближаем их и проверяем PvP-удар
 				local enter2 = ArenaService:EnterArena(p2)
-				TestRunner.Assert(enter2.ok and enter2.inArena, "Player 2 should enter arena")
+				TestRunner.Assert(enter2.inArena and enter2.errorCode == nil, "Player 2 should enter arena")
 				p2.Position = p1.Position + Vector3.new(4, 0, 0)
 
 				local pvpHit = ArenaService:AttackPlayer(p1, p2.UserId)
@@ -327,16 +327,15 @@ function CombatLoopTests.RunAll(): TestRunner.SuiteSummary
 
 				-- 5. Попытка немедленно покинуть арену во время боя -> COMBAT_TAGGED
 				local fleeAttempt = ArenaService:LeaveArena(p1)
-				TestRunner.Assert(not fleeAttempt.ok, "Leaving arena while combat-tagged must fail")
-				TestRunner.AssertEqual(fleeAttempt.errorCode, "COMBAT_TAGGED", "Expected COMBAT_TAGGED")
+				TestRunner.Assert(fleeAttempt.inArena and fleeAttempt.errorCode == "COMBAT_TAGGED", "Leaving arena while combat-tagged must fail")
 
 				-- 6. После сброса боевой метки выход из арены разрешён
 				ArenaService:ClearCooldownsForTest(p1)
 				ArenaService:ClearCooldownsForTest(p2)
 				local leave1 = ArenaService:LeaveArena(p1)
 				local leave2 = ArenaService:LeaveArena(p2)
-				TestRunner.Assert(leave1.ok and not leave1.inArena, "Player 1 should leave arena after combat tag expires")
-				TestRunner.Assert(leave2.ok and not leave2.inArena, "Player 2 should leave arena after combat tag expires")
+				TestRunner.Assert(not leave1.inArena and leave1.errorCode == nil, "Player 1 should leave arena after combat tag expires")
+				TestRunner.Assert(not leave2.inArena and leave2.errorCode == nil, "Player 2 should leave arena after combat tag expires")
 
 				PlayerDataService:RemoveSessionForTest(p1)
 				PlayerDataService:RemoveSessionForTest(p2)

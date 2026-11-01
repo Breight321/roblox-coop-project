@@ -3,7 +3,7 @@
 	@module SkillTreeService
 	@owner Agent A (Breight321)
 	@description Серверно-авторитетное дерево пассивных навыков (ветки Damage, Defense, Mobility).
-	Проверяет очки навыков, уровень игрока и предварительные узлы (prerequisites), сохраняя прогресс в профиле игрока.
+	Проверяет очки навыков, уровень игрока и предварительные узлы (requires), сохраняя прогресс в профиле игрока.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -81,7 +81,7 @@ local function calculateSpentPoints(unlocked: { [string]: boolean }): number
 		if isUnlocked then
 			local node = SkillTreeConfig.Nodes[skillId]
 			if node then
-				spent += node.costPoints
+				spent += node.cost
 			end
 		end
 	end
@@ -99,9 +99,10 @@ local function buildStatePayload(profile: Types.PlayerProfileData): Types.SkillT
 	local spent = calculateSpentPoints(unlockedCopy)
 	local available = math.max(0, section.earnedPoints - spent)
 	return {
-		availablePoints = available,
+		unlocked = unlockedCopy,
+		earnedPoints = section.earnedPoints,
 		spentPoints = spent,
-		unlockedSkills = unlockedCopy,
+		availablePoints = available,
 	}
 end
 
@@ -166,10 +167,7 @@ function SkillTreeService:Start(): ()
 			local res = self:UnlockSkill(player, cleanId)
 			sendUnlockResult(player, res)
 			if res.ok then
-				local state = self:GetState(player)
-				if state then
-					sendStateSync(player, state)
-				end
+				sendStateSync(player, res.state)
 			end
 		end)
 	)
@@ -196,88 +194,64 @@ function SkillTreeService:GetState(player: any): Types.SkillTreeStatePayload?
 end
 
 function SkillTreeService:UnlockSkill(player: any, skillId: string): Types.SkillUnlockResultPayload
-	if not isValidPlayerKey(player) then
+	local emptyState: Types.SkillTreeStatePayload = {
+		unlocked = {},
+		earnedPoints = 0,
+		spentPoints = 0,
+		availablePoints = 0,
+	}
+
+	local function fail(
+		code: Types.SkillErrorCode,
+		msg: string,
+		state: Types.SkillTreeStatePayload
+	): Types.SkillUnlockResultPayload
 		return {
 			ok = false,
-			errorCode = "INVALID_PLAYER",
-			skillId = skillId,
-			availablePoints = 0,
-			spentPoints = 0,
-			unlockedSkills = {},
+			skillId = tostring(skillId or ""),
+			state = state,
+			errorCode = code,
+			message = msg,
 		}
+	end
+
+	if not isValidPlayerKey(player) then
+		return fail("INVALID_PLAYER", "Некорректный игрок.", emptyState)
 	end
 
 	local profile: Types.PlayerProfileData? = unwrapProfile(player)
 	if not profile then
-		return {
-			ok = false,
-			errorCode = "PROFILE_NOT_LOADED",
-			skillId = skillId,
-			availablePoints = 0,
-			spentPoints = 0,
-			unlockedSkills = {},
-		}
+		return fail("PROFILE_NOT_LOADED", "Профиль игрока ещё не загружен.", emptyState)
 	end
 
 	local currentState = buildStatePayload(profile)
 
 	if type(skillId) ~= "string" or SkillTreeConfig.Nodes[skillId] == nil then
-		return {
-			ok = false,
-			errorCode = "UNKNOWN_SKILL",
-			skillId = tostring(skillId),
-			availablePoints = currentState.availablePoints,
-			spentPoints = currentState.spentPoints,
-			unlockedSkills = currentState.unlockedSkills,
-		}
+		return fail("UNKNOWN_SKILL", "Неизвестный узел навыка.", currentState)
 	end
 
 	local node = SkillTreeConfig.Nodes[skillId]
 
-	if currentState.unlockedSkills[skillId] == true then
-		return {
-			ok = false,
-			errorCode = "ALREADY_UNLOCKED",
-			skillId = skillId,
-			availablePoints = currentState.availablePoints,
-			spentPoints = currentState.spentPoints,
-			unlockedSkills = currentState.unlockedSkills,
-		}
+	if currentState.unlocked[skillId] == true then
+		return fail("ALREADY_UNLOCKED", "Этот навык уже изучен.", currentState)
 	end
 
 	if profile.level < node.requiredLevel then
-		return {
-			ok = false,
-			errorCode = "LEVEL_TOO_LOW",
-			skillId = skillId,
-			availablePoints = currentState.availablePoints,
-			spentPoints = currentState.spentPoints,
-			unlockedSkills = currentState.unlockedSkills,
-		}
+		return fail(
+			"LEVEL_TOO_LOW",
+			string.format("Требуется уровень %d для изучения навыка.", node.requiredLevel),
+			currentState
+		)
 	end
 
-	for _, prereqId in ipairs(node.prerequisites) do
-		if currentState.unlockedSkills[prereqId] ~= true then
-			return {
-				ok = false,
-				errorCode = "PREREQUISITE_LOCKED",
-				skillId = skillId,
-				availablePoints = currentState.availablePoints,
-				spentPoints = currentState.spentPoints,
-				unlockedSkills = currentState.unlockedSkills,
-			}
+	for _, prereqId in ipairs(node.requires) do
+		if currentState.unlocked[prereqId] ~= true then
+			return fail("PREREQUISITE_MISSING", "Сначала изучите предыдущий узел ветки.", currentState)
 		end
 	end
 
-	if currentState.availablePoints < node.costPoints then
-		return {
-			ok = false,
-			errorCode = "INSUFFICIENT_SKILL_POINTS",
-			skillId = skillId,
-			availablePoints = currentState.availablePoints,
-			spentPoints = currentState.spentPoints,
-			unlockedSkills = currentState.unlockedSkills,
-		}
+	if currentState.availablePoints < node.cost then
+		return fail("NOT_ENOUGH_POINTS", "Недостаточно очков навыков.", currentState)
 	end
 
 	local updatedState: Types.SkillTreeStatePayload = currentState
@@ -292,22 +266,24 @@ function SkillTreeService:UnlockSkill(player: any, skillId: string): Types.Skill
 
 	return {
 		ok = true,
-		errorCode = nil,
 		skillId = skillId,
-		availablePoints = updatedState.availablePoints,
-		spentPoints = updatedState.spentPoints,
-		unlockedSkills = updatedState.unlockedSkills,
+		state = updatedState,
+		errorCode = nil,
+		message = string.format("Навык «%s» успешно изучен!", node.displayName),
 	}
 end
 
 function SkillTreeService:GetSkillBonuses(player: any): Types.BodyStatBlock
 	local bonuses: Types.BodyStatBlock = {
-		damage = 0,
+		attackPower = 0,
+		critChance = 0,
+		critMultiplier = 0,
 		maxHealth = 0,
 		defense = 0,
 		moveSpeed = 0,
-		critChance = 0,
-		attackSpeed = 0,
+		attackCooldownReduction = 0,
+		attackPowerPct = 0,
+		maxHealthPct = 0,
 	}
 
 	local state = self:GetState(player)
@@ -315,16 +291,20 @@ function SkillTreeService:GetSkillBonuses(player: any): Types.BodyStatBlock
 		return bonuses
 	end
 
-	for skillId, isUnlocked in pairs(state.unlockedSkills) do
+	for skillId, isUnlocked in pairs(state.unlocked) do
 		if isUnlocked then
 			local node = SkillTreeConfig.Nodes[skillId]
-			if node and node.stats then
-				bonuses.damage = (bonuses.damage or 0) + (node.stats.damage or 0)
-				bonuses.maxHealth = (bonuses.maxHealth or 0) + (node.stats.maxHealth or 0)
-				bonuses.defense = (bonuses.defense or 0) + (node.stats.defense or 0)
-				bonuses.moveSpeed = (bonuses.moveSpeed or 0) + (node.stats.moveSpeed or 0)
-				bonuses.critChance = (bonuses.critChance or 0) + (node.stats.critChance or 0)
-				bonuses.attackSpeed = (bonuses.attackSpeed or 0) + (node.stats.attackSpeed or 0)
+			if node and node.bonuses then
+				local b = node.bonuses
+				bonuses.attackPower = (bonuses.attackPower or 0) + (b.attackPower or 0)
+				bonuses.critChance = (bonuses.critChance or 0) + (b.critChance or 0)
+				bonuses.critMultiplier = (bonuses.critMultiplier or 0) + (b.critMultiplier or 0)
+				bonuses.maxHealth = (bonuses.maxHealth or 0) + (b.maxHealth or 0)
+				bonuses.defense = (bonuses.defense or 0) + (b.defense or 0)
+				bonuses.moveSpeed = (bonuses.moveSpeed or 0) + (b.moveSpeed or 0)
+				bonuses.attackCooldownReduction = (bonuses.attackCooldownReduction or 0) + (b.attackCooldownReduction or 0)
+				bonuses.attackPowerPct = (bonuses.attackPowerPct or 0) + (b.attackPowerPct or 0)
+				bonuses.maxHealthPct = (bonuses.maxHealthPct or 0) + (b.maxHealthPct or 0)
 			end
 		end
 	end
