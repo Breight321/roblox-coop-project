@@ -1,31 +1,27 @@
 # 📝 CHANGELOG.md
 
-Все значимые изменения в проекте **Roblox Simulator Framework** документируются в этом файле.
+Все значимые изменения в проекте **Universal Reusable Roblox Framework** документируются в этом файле.
 
-## [0.1.0] — 2026-11-01 (Phase 1: Joint Architecture & Project Initialization)
+## [1.0.0] — 2026-11-01 (Universal Reusable Roblox Framework Migration)
 
 ### Added
-- **Документация проекта:**
-  - `ARCHITECTURE.md` — полное описание 15 систем фреймворка, графа зависимостей и структуры папок.
-  - `API_REGISTRY.md` — единый реестр публичных интерфейсов, типов и сетевых событий.
-  - `MODULE_STANDARD.md` — стандарт написания модулей Luau (`--!strict`, `Result<T, E>`, жизненный цикл).
-  - `CONTRIBUTING.md` — правила работы с ветками (`main`, `develop`, `feature/*`) и кооперации двух агентов.
-  - `TASKS.md` и `CHANGELOG.md` — план работ и журнал изменений.
-- **Core Framework (`src/shared/Core/`):**
-  - `Types.luau` — строгие Luau-типы для всех систем фреймворка.
-  - `Logger.luau` — структурированное логирование.
-  - `Signal.luau` — типизированная шина событий с методом `Destroy()`.
-  - `Network.luau` — типизированный сетевой слой поверх `Remotes.luau`.
-  - `Registry.luau` — контейнер модулей с топологической сортировкой зависимостей, защитой от циклов и жизненным циклом `Init -> Start -> Shutdown`.
-  - `TestRunner.luau` — встроенная среда тестирования модулей.
-- **Configuration System (`src/shared/Config/`):**
-  - Добавлены базовые конфигурации: `GameConfig.luau`, `CurrenciesConfig.luau`, `ItemsConfig.luau`, `ZonesConfig.luau`, `ShopConfig.luau`, `QuestsConfig.luau`.
-- **Server Services (`src/server/Services/` — Agent 1):**
-  - Созданы базовые сервисы с согласованным API: `PlayerDataService`, `EconomyService`, `InventoryService`, `ProgressionService`, `ShopService`, `QuestService`.
-- **Client Controllers & UI/World Systems (`src/client/` — Agent 2):**
-  - Созданы клиентские контроллеры с DAG-зависимостями: `AudioController`, `AnimationController`, `UIController`, `WorldController`, `InteractionController`.
-  - Реализована модульная система интерфейса (`Theme.luau`, `HUDComponent.luau`, `WindowComponent.luau`, `NotificationComponent.luau`).
-  - Реализованы клиентские системы мира и зон (`ZoneGateManager.luau`, `ItemDisplayManager.luau`).
-- **Bootstrap & Tests:**
-  - Обновлены `src/server/init.server.luau` и `src/client/init.client.luau` для работы через `Registry`.
-  - Добавлен тестовый набор `src/shared/Tests/FrameworkTests.luau`.
+- **Полный пакет документации универсального фреймворка:**
+  - `MODULE_REGISTRY.md` — реестр 18 модулей с версиями, зависимостями и границами ответственности.
+  - `API_REFERENCE.md` — справочник публичных API универсальных модулей.
+  - `QUICK_START.md` — руководство по быстрой установке всего фреймворка или отдельных модулей в любую новую игру Roblox.
+  - `VERSIONING.md` — политика семантического версионирования (`SemVer`).
+  - `INTEGRATION_GUIDE.md` — паттерны слабосвязанной интеграции через адаптеры (`RegisterMultiplierModifier`, `RegisterSchemaSection`).
+  - `src/shared/Core/README.md` — документация ядра (`Core` & `Shared`).
+- **Декуплинг и универсализация модулей:**
+  - В `EconomyService` добавлены `RegisterCurrency` и `RegisterMultiplierModifier` / `RemoveMultiplierModifier`, полностью удалены прямые импорты `ItemsConfig` и `ZonesConfig`.
+  - В `PlayerDataService` добавлены `RegisterSchemaSection` и `RegisterMigration` для расширяемых пользовательских профилей.
+  - В `InventoryService` добавлены `SetCategoryEquipLimit`, поддержка стекирования (`quantity`) и опциональный адаптер множителей для `EconomyService`.
+  - В `Network.luau` добавлен метод `Network.RegisterEvent(eventName)`.
+
+## [0.2.0] — 2026-11-01 (Phase 2: Repository Hardening & Economy + Shop UI Integration)
+- Модульные пакеты `src/server/Services/EconomyService/` и `src/client/UI/ShopUI/` со встроенными тестами (`EconomyTests.luau`, `ShopUITests.luau`).
+- Контракт `ShopPurchaseResult` и состояния `Loading / Success / Error` в `ShopUI`.
+- Защита от дублирования транзакций, rate limiting и двухфазный Rollback в `ShopService`.
+
+## [0.1.0] — 2026-11-01 (Phase 1: Joint Architecture & Project Initialization)
+- Базовая архитектура `Core Framework`, `Registry` (DAG), `Signal`, `Network`, `Logger`, `TestRunner`.
