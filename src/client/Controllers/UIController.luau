@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module UIController
-	@owner Agent 2 (anarugod)
-	@description Оркестратор пользовательского интерфейса: управление экранами через WindowManager, HUD, магазином, инвентарём, квестами, ребиртами и уведомлениями.
+	@owner Agent B (anarugod)
+	@description Оркестратор пользовательского интерфейса: управление экранами через WindowManager, HUD, модульным ShopUI, инвентарём, квестами, ребиртами и уведомлениями.
 ]]
 
 local Players = game:GetService("Players")
@@ -16,11 +16,11 @@ local Network = require(Shared:WaitForChild("Core"):WaitForChild("Network"))
 
 local UIFolder = script.Parent.Parent:WaitForChild("UI")
 local WindowManager = require(UIFolder:WaitForChild("WindowManager"))
+local ShopUI = require(UIFolder:WaitForChild("ShopUI"))
 local ComponentsFolder = UIFolder:WaitForChild("Components")
 local HUDComponent = require(ComponentsFolder:WaitForChild("HUDComponent"))
 local WindowComponent = require(ComponentsFolder:WaitForChild("WindowComponent"))
 local NotificationComponent = require(ComponentsFolder:WaitForChild("NotificationComponent"))
-local ShopView = require(ComponentsFolder:WaitForChild("ShopView"))
 local InventoryView = require(ComponentsFolder:WaitForChild("InventoryView"))
 local QuestsView = require(ComponentsFolder:WaitForChild("QuestsView"))
 local RebirthView = require(ComponentsFolder:WaitForChild("RebirthView"))
@@ -34,6 +34,7 @@ local UIController = {
 	OnInventoryUpdated = Signal.new(),
 	OnProgressionUpdated = Signal.new(),
 	OnQuestUpdated = Signal.new(),
+	OnShopPurchaseResolved = Signal.new(),
 	OnPrimaryClickRequested = Signal.new(),
 }
 
@@ -45,6 +46,7 @@ local screenGui: ScreenGui? = nil
 local hudHandle: HUDComponent.HUDHandle? = nil
 local notificationContainer: Frame? = nil
 local windowManager: WindowManager.WindowManagerInstance? = nil
+local shopUI: ShopUI.ShopUIInstance? = nil
 
 local cachedProfile: Types.PlayerProfileData? = nil
 local connections: { RBXScriptConnection } = {}
@@ -65,12 +67,28 @@ function UIController:Init(registry: any): ()
 		end,
 	})
 
+	shopUI = ShopUI.new()
+	if shopUI then
+		shopUI.OnPurchaseRequested:Connect(function(shopItemId: string)
+			audioController:PlaySFX("UIButton")
+			Network.FireServer(Network.Events.RequestShopPurchase, shopItemId)
+		end)
+	end
+
 	log:Info("Initialized UIController")
 end
 
 function UIController:_refreshDynamicViews(): ()
 	if not cachedProfile or not windowManager then
 		return
+	end
+
+	if shopUI then
+		shopUI:UpdatePlayerContext({
+			currencies = cachedProfile.currencies,
+			rebirths = cachedProfile.rebirths,
+			unlockedZones = cachedProfile.unlockedZones,
+		})
 	end
 
 	local invWin = windowManager:GetWindow("Inventory")
@@ -149,11 +167,8 @@ function UIController:_mountInterface(): ()
 	end
 
 	local shopWin = windowManager:GetWindow("Shop")
-	if shopWin then
-		ShopView.Populate(shopWin.Content, function(shopItemId: string)
-			audioController:PlaySFX("UIButton")
-			Network.FireServer(Network.Events.RequestShopPurchase, shopItemId)
-		end)
+	if shopWin and shopUI then
+		shopUI:Mount(shopWin.Content)
 	end
 end
 
@@ -198,10 +213,24 @@ function UIController:Start(): ()
 				if cachedProfile then
 					cachedProfile.inventory = inventory
 				end
+				if shopUI and shopUI:GetStatus() == "Loading" then
+					shopUI:ResolvePurchase(nil, true, "Purchase complete!")
+				end
 				self:_refreshDynamicViews()
 				self.OnInventoryUpdated:Fire(inventory)
 			end
 		)
+	)
+
+	local shopResultEventName = (Network.Events :: any).ShopPurchaseResult or "ShopPurchaseResult"
+	table.insert(
+		connections,
+		Network.OnClientEvent(shopResultEventName, function(response: any)
+			if type(response) == "table" and shopUI then
+				shopUI:ResolvePurchase(response.shopItemId, response.ok == true, response.message)
+				self.OnShopPurchaseResolved:Fire(response)
+			end
+		end)
 	)
 
 	table.insert(
@@ -238,6 +267,9 @@ function UIController:Start(): ()
 	table.insert(
 		connections,
 		Network.OnClientEvent(Network.Events.Notification, function(notifType: string, message: string)
+			if shopUI and shopUI:GetStatus() == "Loading" and notifType == "Error" then
+				shopUI:ResolvePurchase(nil, false, message)
+			end
 			self:ShowNotification(notifType, message)
 		end)
 	)
@@ -289,6 +321,10 @@ function UIController:GetWindowManager(): WindowManager.WindowManagerInstance?
 	return windowManager
 end
 
+function UIController:GetShopUI(): ShopUI.ShopUIInstance?
+	return shopUI
+end
+
 function UIController:ShowNotification(notifType: string, message: string): ()
 	if notificationContainer then
 		NotificationComponent.ShowToast(notificationContainer, notifType, message, 3.0)
@@ -309,6 +345,11 @@ function UIController:Shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
+
+	if shopUI then
+		shopUI:Destroy()
+		shopUI = nil
+	end
 
 	if windowManager then
 		windowManager:Destroy()
