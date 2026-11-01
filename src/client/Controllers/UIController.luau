@@ -2,7 +2,7 @@
 --[[
 	@module UIController
 	@owner Agent 2 (anarugod)
-	@description Оркестратор пользовательского интерфейса: управление экранами, HUD, магазином, инвентарём, квестами, ребиртами и уведомлениями.
+	@description Оркестратор пользовательского интерфейса: управление экранами через WindowManager, HUD, магазином, инвентарём, квестами, ребиртами и уведомлениями.
 ]]
 
 local Players = game:GetService("Players")
@@ -15,6 +15,7 @@ local Signal = require(Shared:WaitForChild("Core"):WaitForChild("Signal"))
 local Network = require(Shared:WaitForChild("Core"):WaitForChild("Network"))
 
 local UIFolder = script.Parent.Parent:WaitForChild("UI")
+local WindowManager = require(UIFolder:WaitForChild("WindowManager"))
 local ComponentsFolder = UIFolder:WaitForChild("Components")
 local HUDComponent = require(ComponentsFolder:WaitForChild("HUDComponent"))
 local WindowComponent = require(ComponentsFolder:WaitForChild("WindowComponent"))
@@ -43,8 +44,7 @@ local animationController: any = nil
 local screenGui: ScreenGui? = nil
 local hudHandle: HUDComponent.HUDHandle? = nil
 local notificationContainer: Frame? = nil
-local windows: { [string]: WindowComponent.WindowHandle } = {}
-local activeScreen: string? = nil
+local windowManager: WindowManager.WindowManagerInstance? = nil
 
 local cachedProfile: Types.PlayerProfileData? = nil
 local connections: { RBXScriptConnection } = {}
@@ -52,15 +52,28 @@ local connections: { RBXScriptConnection } = {}
 function UIController:Init(registry: any): ()
 	audioController = registry:Get("AudioController")
 	animationController = registry:Get("AnimationController")
+
+	windowManager = WindowManager.new({
+		OnWindowOpened = function(name: string, handle: WindowComponent.WindowHandle)
+			animationController:PlayUIEffect("PopIn", handle.Root)
+			audioController:PlaySFX("UIButton")
+			self.OnScreenChanged:Fire(name, true)
+		end,
+		OnWindowClosed = function(name: string, _handle: WindowComponent.WindowHandle)
+			audioController:PlaySFX("UIButton")
+			self.OnScreenChanged:Fire(name, false)
+		end,
+	})
+
 	log:Info("Initialized UIController")
 end
 
 function UIController:_refreshDynamicViews(): ()
-	if not cachedProfile then
+	if not cachedProfile or not windowManager then
 		return
 	end
 
-	local invWin = windows["Inventory"]
+	local invWin = windowManager:GetWindow("Inventory")
 	if invWin then
 		InventoryView.Render(invWin.Content, cachedProfile.inventory, function(itemUid: string, equip: boolean)
 			audioController:PlaySFX("UIButton")
@@ -68,7 +81,7 @@ function UIController:_refreshDynamicViews(): ()
 		end)
 	end
 
-	local questsWin = windows["Quests"]
+	local questsWin = windowManager:GetWindow("Quests")
 	if questsWin then
 		QuestsView.Render(questsWin.Content, cachedProfile.quests, function(questId: string)
 			audioController:PlaySFX("UIButton")
@@ -76,7 +89,7 @@ function UIController:_refreshDynamicViews(): ()
 		end)
 	end
 
-	local rebirthWin = windows["Rebirth"]
+	local rebirthWin = windowManager:GetWindow("Rebirth")
 	if rebirthWin then
 		RebirthView.Render(
 			rebirthWin.Content,
@@ -92,7 +105,7 @@ end
 
 function UIController:_mountInterface(): ()
 	local localPlayer = Players.LocalPlayer
-	if not localPlayer then
+	if not localPlayer or not windowManager then
 		return
 	end
 
@@ -129,12 +142,13 @@ function UIController:_mountInterface(): ()
 	}
 
 	for _, def in ipairs(modalDefinitions) do
-		windows[def.Name] = WindowComponent.Create(gui, def.Name, def.Title, function()
+		local handle = WindowComponent.Create(gui, def.Name, def.Title, function()
 			self:CloseScreen(def.Name)
 		end)
+		windowManager:RegisterWindow(def.Name, handle)
 	end
 
-	local shopWin = windows["Shop"]
+	local shopWin = windowManager:GetWindow("Shop")
 	if shopWin then
 		ShopView.Populate(shopWin.Content, function(shopItemId: string)
 			audioController:PlaySFX("UIButton")
@@ -232,47 +246,47 @@ function UIController:Start(): ()
 end
 
 function UIController:OpenScreen(screenName: string): ()
-	if activeScreen and activeScreen ~= screenName then
-		self:CloseScreen(activeScreen)
-	end
-
 	self:_refreshDynamicViews()
-
-	local win = windows[screenName]
-	if win then
-		win:SetVisible(true)
-		animationController:PlayUIEffect("PopIn", win.Root)
+	if windowManager then
+		windowManager:Open(screenName)
 	end
-
-	activeScreen = screenName
-	audioController:PlaySFX("UIButton")
-	self.OnScreenChanged:Fire(screenName, true)
 end
 
 function UIController:CloseScreen(screenName: string): ()
-	local win = windows[screenName]
-	if win then
-		win:SetVisible(false)
+	if windowManager then
+		windowManager:Close(screenName)
 	end
+end
 
-	if activeScreen == screenName then
-		activeScreen = nil
+function UIController:CloseAllScreens(): ()
+	if windowManager then
+		windowManager:CloseAll()
 	end
-
-	audioController:PlaySFX("UIButton")
-	self.OnScreenChanged:Fire(screenName, false)
 end
 
 function UIController:ToggleScreen(screenName: string): ()
-	if activeScreen == screenName then
-		self:CloseScreen(screenName)
-	else
-		self:OpenScreen(screenName)
+	self:_refreshDynamicViews()
+	if windowManager then
+		windowManager:Toggle(screenName)
 	end
 end
 
 function UIController:GetActiveScreen(): string?
-	return activeScreen
+	if windowManager then
+		return windowManager:GetActiveWindow()
+	end
+	return nil
+end
+
+function UIController:IsAnyWindowOpen(): boolean
+	if windowManager then
+		return windowManager:IsAnyWindowOpen()
+	end
+	return false
+end
+
+function UIController:GetWindowManager(): WindowManager.WindowManagerInstance?
+	return windowManager
 end
 
 function UIController:ShowNotification(notifType: string, message: string): ()
@@ -295,14 +309,17 @@ function UIController:Shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
-	table.clear(windows)
+
+	if windowManager then
+		windowManager:Destroy()
+		windowManager = nil
+	end
 
 	if screenGui then
 		screenGui:Destroy()
 		screenGui = nil
 	end
 
-	activeScreen = nil
 	log:Info("Shutdown UIController")
 end
 

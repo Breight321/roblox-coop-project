@@ -109,8 +109,17 @@ function WorldController:GetCurrentZone(): string
 	return currentZoneId
 end
 
+function WorldController:GetZoneDef(zoneId: string?): Types.ZoneDef?
+	local targetId = zoneId or currentZoneId
+	return ZonesConfig[targetId]
+end
+
 function WorldController:GetEquippedToolUid(): string?
 	return ItemDisplayManager.GetEquippedToolUid()
+end
+
+function WorldController:GetEquippedPetUids(): { string }
+	return ItemDisplayManager.GetEquippedPetUids()
 end
 
 function WorldController:Shutdown(): ()
