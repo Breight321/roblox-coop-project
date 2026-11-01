@@ -2,9 +2,10 @@
 --[[
 	@module UIController
 	@owner Agent B (anarugod)
-	@description Оркестратор пользовательского интерфейса для «Aetherfall: Expedition Core»:
-	управление экранами через WindowManager, HUD (сумка, баланс, сдача добычи, командная цель),
-	экраном улучшений (UpgradesView), модульным ShopUI, инвентарём, квестами, ребиртами и уведомлениями.
+	@description Оркестратор пользовательского интерфейса:
+	управление экранами через WindowManager, HUD (бой с мобами, сборка деталей тела, статус PvP-зоны,
+	сумка и командная цель), инвентарь деталей тела (InventoryView), сундуки (ChestsView),
+	дерево навыков (SkillTreeView), добровольная PvP-арена (ArenaView), ShopUI, квесты и ребирты.
 ]]
 
 local Players = game:GetService("Players")
@@ -23,14 +24,21 @@ local ComponentsFolder = UIFolder:WaitForChild("Components")
 local HUDComponent = require(ComponentsFolder:WaitForChild("HUDComponent"))
 local WindowComponent = require(ComponentsFolder:WaitForChild("WindowComponent"))
 local NotificationComponent = require(ComponentsFolder:WaitForChild("NotificationComponent"))
-local UpgradesView = require(ComponentsFolder:WaitForChild("UpgradesView"))
 local InventoryView = require(ComponentsFolder:WaitForChild("InventoryView"))
+local ChestsView = require(ComponentsFolder:WaitForChild("ChestsView"))
+local SkillTreeView = require(ComponentsFolder:WaitForChild("SkillTreeView"))
+local ArenaView = require(ComponentsFolder:WaitForChild("ArenaView"))
 local QuestsView = require(ComponentsFolder:WaitForChild("QuestsView"))
 local RebirthView = require(ComponentsFolder:WaitForChild("RebirthView"))
 
+local UpgradesViewModule = ComponentsFolder:FindFirstChild("UpgradesView")
+local UpgradesView: any = if UpgradesViewModule and UpgradesViewModule:IsA("ModuleScript")
+	then require(UpgradesViewModule)
+	else nil
+
 local UIController = {
 	Name = "UIController",
-	Dependencies = { "AudioController", "AnimationController", "ExpeditionController" },
+	Dependencies = { "AudioController", "AnimationController", "CombatController" },
 	OnScreenChanged = Signal.new(),
 	OnStateUpdated = Signal.new(),
 	OnCurrencyUpdated = Signal.new(),
@@ -45,6 +53,7 @@ local log = Logger.new("UIController")
 local audioController: any = nil
 local animationController: any = nil
 local expeditionController: any = nil
+local combatController: any = nil
 
 local screenGui: ScreenGui? = nil
 local hudHandle: HUDComponent.HUDHandle? = nil
@@ -59,6 +68,7 @@ local signalConnections: { any } = {}
 function UIController:Init(registry: any): ()
 	audioController = registry:Get("AudioController")
 	animationController = registry:Get("AnimationController")
+	combatController = registry:TryGet("CombatController")
 	expeditionController = registry:TryGet("ExpeditionController")
 
 	windowManager = WindowManager.new({
@@ -102,7 +112,7 @@ function UIController:_refreshExpeditionUI(): ()
 		hudHandle:UpdateTeamProgress(teamState)
 	end
 
-	if windowManager then
+	if windowManager and UpgradesView then
 		local upgradesWin = windowManager:GetWindow("Upgrades")
 		if upgradesWin then
 			UpgradesView.Render(upgradesWin.Content, bagState, bankedCoins, toolVm, bagVm, {
@@ -120,8 +130,87 @@ function UIController:_refreshExpeditionUI(): ()
 	end
 end
 
+function UIController:_refreshCombatAndAssemblyUI(): ()
+	if not combatController then
+		return
+	end
+
+	local mobTarget = combatController:GetActiveMobTarget()
+	local assemblySummary = combatController:GetAssemblySummary()
+	local arenaState = combatController:GetArenaState()
+	local coins = if cachedProfile and cachedProfile.currencies
+		then (cachedProfile.currencies.Coins or 0)
+		elseif expeditionController then expeditionController:GetBankedBalance()
+		else 0
+	local unlockedZones = if cachedProfile then cachedProfile.unlockedZones else nil
+
+	if hudHandle then
+		hudHandle:UpdateCombatState(mobTarget, assemblySummary, arenaState)
+	end
+
+	if not windowManager then
+		return
+	end
+
+	local invWin = windowManager:GetWindow("Inventory")
+	if invWin then
+		local invDict = if cachedProfile and cachedProfile.inventory then cachedProfile.inventory else {}
+		local bodyPartsList = combatController:GetBodyPartsBySlot("All")
+		InventoryView.Render(
+			invWin.Content,
+			invDict,
+			function(itemUid: string, equip: boolean)
+				combatController:RequestEquipBodyPart(itemUid, equip)
+			end,
+			assemblySummary,
+			bodyPartsList
+		)
+	end
+
+	local chestsWin = windowManager:GetWindow("Chests")
+	if chestsWin then
+		ChestsView.Render(
+			chestsWin.Content,
+			combatController:GetZoneChests(),
+			coins,
+			unlockedZones,
+			function(chestId: string)
+				combatController:RequestOpenChest(chestId)
+			end
+		)
+	end
+
+	local skillsWin = windowManager:GetWindow("Skills")
+	if skillsWin then
+		SkillTreeView.Render(
+			skillsWin.Content,
+			combatController:GetSkillTreeNodes(),
+			combatController:GetSkillTreeSummary(),
+			function(skillId: string)
+				combatController:RequestUnlockSkill(skillId)
+			end
+		)
+	end
+
+	local arenaWin = windowManager:GetWindow("Arena")
+	if arenaWin then
+		ArenaView.Render(
+			arenaWin.Content,
+			arenaState,
+			assemblySummary,
+			function()
+				combatController:RequestEnterArena()
+			end,
+			function()
+				combatController:RequestLeaveArena()
+			end
+		)
+	end
+end
+
 function UIController:_refreshDynamicViews(): ()
 	self:_refreshExpeditionUI()
+	self:_refreshCombatAndAssemblyUI()
 
 	if not cachedProfile or not windowManager then
 		return
@@ -133,14 +222,6 @@ function UIController:_refreshDynamicViews(): ()
 			rebirths = cachedProfile.rebirths,
 			unlockedZones = cachedProfile.unlockedZones,
 		})
-	end
-
-	local invWin = windowManager:GetWindow("Inventory")
-	if invWin then
-		InventoryView.Render(invWin.Content, cachedProfile.inventory, function(itemUid: string, equip: boolean)
-			audioController:PlaySFX("UIButton")
-			Network.FireServer(Network.Events.RequestEquipItem, itemUid, equip)
-		end)
 	end
 
 	local questsWin = windowManager:GetWindow("Quests")
@@ -199,7 +280,7 @@ function UIController:_mountInterface(): ()
 			if expeditionController then
 				local res = expeditionController:RequestDeposit("hud_deposit_button")
 				if not res.ok and res.error == "BAG_EMPTY" then
-					self:ShowNotification("Warning", "Сумка пуста! Сначала соберите Эфирные Монеты.")
+					self:ShowNotification("Warning", "Сумка пуста! Сначала соберите ресурсы.")
 				end
 			end
 		end,
@@ -218,10 +299,13 @@ function UIController:_mountInterface(): ()
 	})
 
 	local modalDefinitions = {
+		{ Name = "Inventory", Title = "🦾 Сборка Персонажа и Детали Тела (Голова, Корпус, Руки, Ноги)" },
+		{ Name = "Skills", Title = "🌳 Дерево Навыков (Урон • Защита • Мобильность)" },
+		{ Name = "Chests", Title = "🧰 Сундуки Локаций (Награды по подтверждению сервера)" },
+		{ Name = "Arena", Title = "⚔️ Добровольная PvP-Арена (Обычные зоны безопасны)" },
+		{ Name = "Shop", Title = "🛒 Магазин Экипировки и Питомцев" },
 		{ Name = "Upgrades", Title = "🛠️ Мастерская Улучшений (Инструмент и Сумка)" },
-		{ Name = "Shop", Title = "🛒 Экипировка и Питомцы Экспедиции" },
-		{ Name = "Inventory", Title = "🎒 Инвентарь и Снаряжение" },
-		{ Name = "Quests", Title = "📜 Задания Экспедиции" },
+		{ Name = "Quests", Title = "📜 Задания" },
 		{ Name = "Rebirth", Title = "🔥 Алтарь Возрождения" },
 	}
 
@@ -237,11 +321,67 @@ function UIController:_mountInterface(): ()
 		shopUI:Mount(shopWin.Content)
 	end
 
-	self:_refreshExpeditionUI()
+	self:_refreshDynamicViews()
 end
 
 function UIController:Start(): ()
 	self:_mountInterface()
+
+	if combatController then
+		table.insert(
+			signalConnections,
+			combatController.OnStateChanged:Connect(function()
+				self:_refreshCombatAndAssemblyUI()
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			combatController.OnMobDefeated:Connect(function(feedback: any)
+				if type(feedback) == "table" then
+					self:ShowNotification(
+						"Reward",
+						string.format(
+							"🏆 Моб повержен! %s",
+							tostring(feedback.rewardText or "Награда начислена сервером!")
+						)
+					)
+				end
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			combatController.OnAssemblyUpdated:Connect(function(summary: any)
+				if type(summary) == "table" and type(summary.lastDeltaSummary) == "string" then
+					self:ShowNotification("Success", "🦾 " .. summary.lastDeltaSummary)
+				end
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			combatController.OnChestResolved:Connect(function(chestVm: any)
+				if type(chestVm) == "table" then
+					if chestVm.status == "Success" and chestVm.lastRewardText then
+						self:ShowNotification("Reward", chestVm.lastRewardText)
+					elseif chestVm.status == "Error" and chestVm.statusMessage then
+						self:ShowNotification("Error", chestVm.statusMessage)
+					end
+				end
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			combatController.OnArenaMatchResolved:Connect(function(arenaVm: any)
+				if type(arenaVm) == "table" and type(arenaVm.lastMatchMessage) == "string" then
+					local notifKind = if arenaVm.lastMatchOutcome == "Victory" then "Reward" else "Warning"
+					self:ShowNotification(notifKind, arenaVm.lastMatchMessage)
+				end
+			end)
+		)
+	end
 
 	if expeditionController then
 		table.insert(

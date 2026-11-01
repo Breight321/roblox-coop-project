@@ -3,8 +3,9 @@
 	@module WorldController
 	@owner Agent B (anarugod)
 	@description Универсальный контроллер игрового мира и зон: синхронизация открытых локаций,
-	кастомные валидаторы доступа, барьеры зон, общая зона добычи «Aetherfall: Expedition Core»
-	(ExpeditionZoneManager) и визуал экипировки.
+	кастомные валидаторы доступа, барьеры зон (ZoneGateManager), отображение мобов и сундуков
+	по зонам + портал добровольной PvP-арены (WorldMobChestManager), общая зона добычи
+	(ExpeditionZoneManager) и визуал экипировки (ItemDisplayManager).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,11 +23,16 @@ local WorldConfig = require(script:WaitForChild("Config"))
 local WorldFolder = script.Parent.Parent:WaitForChild("World")
 local ZoneGateManager = require(WorldFolder:WaitForChild("Zones"):WaitForChild("ZoneGateManager"))
 local ItemDisplayManager = require(WorldFolder:WaitForChild("Items"):WaitForChild("ItemDisplayManager"))
-local ExpeditionZoneManager = require(WorldFolder:WaitForChild("ExpeditionZoneManager"))
+local WorldMobChestManager = require(WorldFolder:WaitForChild("WorldMobChestManager"))
+
+local ExpeditionZoneManagerModule = WorldFolder:FindFirstChild("ExpeditionZoneManager")
+local ExpeditionZoneManager: any = if ExpeditionZoneManagerModule and ExpeditionZoneManagerModule:IsA("ModuleScript")
+	then require(ExpeditionZoneManagerModule)
+	else nil
 
 local WorldController = {
 	Name = "WorldController",
-	Dependencies = { "UIController", "AudioController", "ExpeditionController" },
+	Dependencies = { "UIController", "AudioController", "CombatController" },
 	OnZoneEntered = Signal.new(),
 	OnZonesSynced = Signal.new(),
 }
@@ -35,6 +41,7 @@ local log = Logger.new("WorldController")
 local uiController: any = nil
 local audioController: any = nil
 local expeditionController: any = nil
+local combatController: any = nil
 
 local currentZoneId = WorldConfig.DefaultStartingZoneId
 local unlockedZonesState: { [string]: boolean } = {
@@ -46,6 +53,7 @@ local connections: { Signal.SignalConnection } = {}
 function WorldController:Init(registry: any): ()
 	uiController = registry:TryGet("UIController")
 	audioController = registry:TryGet("AudioController")
+	combatController = registry:TryGet("CombatController")
 	expeditionController = registry:TryGet("ExpeditionController")
 	log:Info("Initialized WorldController")
 end
@@ -54,21 +62,80 @@ function WorldController:Start(): ()
 	self:SyncUnlockedZones(unlockedZonesState)
 
 	if WorldConfig.AutoSyncGatesToWorkspace then
-		ExpeditionZoneManager.EnsureWorld({
-			OnCollectNodeTriggered = function(nodeId: string)
-				if expeditionController then
-					expeditionController:RequestCollect(nodeId, self:GetEquippedToolUid())
+		WorldMobChestManager.EnsureWorld({
+			OnMobAttackTriggered = function(mobInstanceId: string)
+				if combatController then
+					combatController:SelectMobTarget(mobInstanceId)
+					combatController:RequestAttackMob(mobInstanceId, self:GetEquippedToolUid())
 				end
 			end,
-			OnDepositStationTriggered = function(stationId: string)
-				if expeditionController then
-					expeditionController:RequestDeposit(stationId)
+			OnChestOpenTriggered = function(chestId: string)
+				if combatController then
+					combatController:RequestOpenChest(chestId)
+				end
+				if uiController then
+					uiController:OpenScreen("Chests")
+				end
+			end,
+			OnArenaPortalTriggered = function()
+				if combatController then
+					local st = combatController:GetArenaState()
+					if st.isSafeZone then
+						combatController:RequestEnterArena()
+					else
+						combatController:RequestLeaveArena()
+					end
+				end
+				if uiController then
+					uiController:OpenScreen("Arena")
 				end
 			end,
 		})
+
+		if ExpeditionZoneManager then
+			ExpeditionZoneManager.EnsureWorld({
+				OnCollectNodeTriggered = function(nodeId: string)
+					if expeditionController then
+						expeditionController:RequestCollect(nodeId, self:GetEquippedToolUid())
+					end
+				end,
+				OnDepositStationTriggered = function(stationId: string)
+					if expeditionController then
+						expeditionController:RequestDeposit(stationId)
+					end
+				end,
+			})
+		end
 	end
 
-	if expeditionController then
+	if combatController then
+		WorldMobChestManager.SyncMobs(combatController:GetZoneMobs())
+		WorldMobChestManager.SyncChests(combatController:GetZoneChests())
+
+		table.insert(
+			connections,
+			combatController.OnStateChanged:Connect(function()
+				WorldMobChestManager.SyncMobs(combatController:GetZoneMobs())
+				WorldMobChestManager.SyncChests(combatController:GetZoneChests())
+			end)
+		)
+
+		table.insert(
+			connections,
+			combatController.OnCombatHitFeedback:Connect(function(feedback: any)
+				local uid = type(feedback) == "table" and (feedback.mobUid or feedback.mobInstanceId)
+				if type(uid) == "string" then
+					WorldMobChestManager.PlayMobHitEffect(
+						uid,
+						feedback.damageDealt or 0,
+						feedback.defeated == true
+					)
+				end
+			end)
+		)
+	end
+
+	if expeditionController and ExpeditionZoneManager then
 		ExpeditionZoneManager.SyncBagAndDepositState(expeditionController:GetBagState())
 		ExpeditionZoneManager.SyncTeamMonument(expeditionController:GetTeamProgress())
 
@@ -218,6 +285,10 @@ function WorldController:GetEquippedPetUids(): { string }
 	return ItemDisplayManager.GetEquippedPetUids()
 end
 
+function WorldController:GetEquippedBodyParts(): { [string]: string }
+	return ItemDisplayManager.GetEquippedBodyParts()
+end
+
 function WorldController:ResetStateForTests(): ()
 	currentZoneId = WorldConfig.DefaultStartingZoneId
 	unlockedZonesState = {
@@ -233,7 +304,10 @@ function WorldController:Shutdown(): ()
 	table.clear(connections)
 	ZoneGateManager.Cleanup()
 	ItemDisplayManager.Cleanup()
-	ExpeditionZoneManager.Cleanup()
+	WorldMobChestManager.Cleanup()
+	if ExpeditionZoneManager then
+		ExpeditionZoneManager.Cleanup()
+	end
 	log:Info("Shutdown WorldController")
 end
 

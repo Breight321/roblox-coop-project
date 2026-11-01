@@ -4,7 +4,8 @@
 	@owner Agent B (anarugod)
 	@description Универсальный переиспользуемый контроллер интеракций и ввода:
 	регистрация произвольных игровых действий, кулдауны, хоткеи окон и интеграция
-	со сбором Solar Shards / сдачей на станции / улучшениями через ExpeditionController.
+	с боевым циклом (CombatController), открытием сундуков, деревом навыков, PvP-ареной
+	и экспедицией (ExpeditionController).
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -27,7 +28,7 @@ local InteractionController = {
 		"WorldController",
 		"AudioController",
 		"AnimationController",
-		"ExpeditionController",
+		"CombatController",
 	},
 	OnPrimaryActionTriggered = Signal.new(),
 	OnActionTriggered = Signal.new(),
@@ -39,6 +40,7 @@ local worldController: any = nil
 local audioController: any = nil
 local animationController: any = nil
 local expeditionController: any = nil
+local combatController: any = nil
 
 local interactionEnabled = true
 local lastClickClock = 0
@@ -55,6 +57,7 @@ function InteractionController:Init(registry: any): ()
 	audioController = registry:TryGet("AudioController")
 	animationController = registry:TryGet("AnimationController")
 	expeditionController = registry:TryGet("ExpeditionController")
+	combatController = registry:TryGet("CombatController")
 	log:Info("Initialized InteractionController")
 end
 
@@ -90,7 +93,6 @@ function InteractionController:Start(): ()
 				return
 			end
 
-			-- Check custom registered actions
 			for actionId, actionDef in pairs(registeredActions) do
 				local matched = false
 				if actionDef.keyCodes then
@@ -199,6 +201,11 @@ function InteractionController:TriggerPrimaryAction(): Types.Result<boolean, str
 	end
 
 	local equippedToolUid = if worldController then worldController:GetEquippedToolUid() else nil
+
+	if combatController then
+		combatController:RequestAttackMob(nil, equippedToolUid)
+	end
+
 	if expeditionController then
 		local res = expeditionController:RequestCollect(nil, equippedToolUid)
 		if res.ok then
@@ -244,7 +251,10 @@ function InteractionController:RequestDeposit(stationId: string?): Types.Result<
 	if expeditionController then
 		return expeditionController:RequestDeposit(stationId)
 	end
-	Network.FireServer(Network.Events.RequestDeposit, stationId or "central_refinery")
+	local events = Network.Events :: { [string]: string }
+	if events.RequestDeposit then
+		Network.FireServer(events.RequestDeposit, stationId or "central_refinery")
+	end
 	return Types.Ok(true)
 end
 
@@ -252,7 +262,10 @@ function InteractionController:RequestUpgrade(trackId: "Tool" | "Bag"): Types.Re
 	if expeditionController then
 		return expeditionController:RequestUpgrade(trackId)
 	end
-	Network.FireServer(Network.Events.RequestHarvestUpgrade, trackId)
+	local events = Network.Events :: { [string]: string }
+	if events.RequestHarvestUpgrade then
+		Network.FireServer(events.RequestHarvestUpgrade, trackId)
+	end
 	return Types.Ok(true)
 end
 
@@ -265,6 +278,10 @@ end
 
 function InteractionController:RequestEquipItem(itemUid: string, equip: boolean): ()
 	if type(itemUid) ~= "string" or #itemUid == 0 then
+		return
+	end
+	if combatController then
+		combatController:RequestEquipBodyPart(itemUid, equip)
 		return
 	end
 	Network.FireServer(Network.Events.RequestEquipItem, itemUid, equip)
