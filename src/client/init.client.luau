@@ -2,7 +2,8 @@
 --[[
 	@module ClientBootstrap (init.client.luau)
 	@owner Agent B (anarugod) & Shared Bootstrap
-	@description Точка входа клиентской части «Aetherfall: Expedition Core». Сначала мгновенно инициализирует и монтирует UI/контроллеры, затем запускает клиентские тест-сьюты через TestRunner.
+	@description Точка входа клиентской части. Сначала мгновенно инициализирует и монтирует UI/контроллеры,
+	затем запускает клиентские тест-сьюты через TestRunner.
 ]]
 
 local Players = game:GetService("Players")
@@ -26,7 +27,6 @@ log:Info(
 
 local controllersFolder = script:WaitForChild("Controllers", 5)
 
--- 1. Сначала регистрируем и запускаем все клиентские контроллеры (включая ExpeditionController и UIController)
 local clientRegistry = Registry.new("Client")
 
 if controllersFolder then
@@ -44,12 +44,11 @@ end
 local initRes = clientRegistry:InitAll()
 if initRes.ok then
 	clientRegistry:StartAll()
-	log:Info("Client Bootstrap complete — UI & Expedition loop mounted.")
+	log:Info("Client Bootstrap complete — UI, Combat, Assembly & World loops mounted.")
 else
 	log:Error("Client Bootstrap failed: %s", tostring(initRes.error))
 end
 
--- 2. Изолированные клиентские тест-сьюты запускаем в фоновом потоке после старта UI
 if GameConfig.RunTestsOnStartup then
 	task.spawn(function()
 		local uiFolder = script:FindFirstChild("UI")
@@ -62,6 +61,14 @@ if GameConfig.RunTestsOnStartup then
 		end
 
 		if controllersFolder then
+			local combatCtrl = controllersFolder:FindFirstChild("CombatController")
+			local combatTestsFolder = if combatCtrl then combatCtrl:FindFirstChild("tests") else nil
+			local combatTestsMod = if combatTestsFolder then combatTestsFolder:FindFirstChild("CombatTests") else nil
+			if combatTestsMod and combatTestsMod:IsA("ModuleScript") then
+				local combatTests = require(combatTestsMod) :: any
+				TestRunner.RunSuite("ClientCombatSuite", combatTests.GetTestCases())
+			end
+
 			local expCtrl = controllersFolder:FindFirstChild("ExpeditionController")
 			local expTestsFolder = if expCtrl then expCtrl:FindFirstChild("tests") else nil
 			local expTestsMod = if expTestsFolder then expTestsFolder:FindFirstChild("ExpeditionTests") else nil
