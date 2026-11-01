@@ -2,7 +2,7 @@
 --[[
 	@module ClientBootstrap (init.client.luau)
 	@owner Agent B (anarugod) & Shared Bootstrap
-	@description Точка входа клиентской части универсального фреймворка. Запускает изолированные клиентские тесты и автоматически загружает контроллеры.
+	@description Точка входа клиентской части универсального фреймворка. Сначала мгновенно инициализирует и монтирует UI/контроллеры, затем запускает тесты.
 ]]
 
 local Players = game:GetService("Players")
@@ -24,37 +24,9 @@ log:Info(
 	if localPlayer then localPlayer.Name else "LocalPlayer"
 )
 
-local controllersFolder = script:FindFirstChild("Controllers")
+local controllersFolder = script:WaitForChild("Controllers", 5)
 
-if GameConfig.RunTestsOnStartup then
-	local uiFolder = script:FindFirstChild("UI")
-	local shopUIFolder = if uiFolder then uiFolder:FindFirstChild("ShopUI") else nil
-	local shopTestsFolder = if shopUIFolder then shopUIFolder:FindFirstChild("tests") else nil
-	local shopTestsMod = if shopTestsFolder then shopTestsFolder:FindFirstChild("ShopUITests") else nil
-	if shopTestsMod and shopTestsMod:IsA("ModuleScript") then
-		local shopUITests = require(shopTestsMod) :: any
-		TestRunner.RunSuite("ClientShopUISuite", shopUITests.GetTestCases())
-	end
-
-	if controllersFolder then
-		local interactionMod = controllersFolder:FindFirstChild("InteractionController")
-		local intTestsFolder = if interactionMod then interactionMod:FindFirstChild("tests") else nil
-		local intTestsMod = if intTestsFolder then intTestsFolder:FindFirstChild("InteractionTests") else nil
-		if intTestsMod and intTestsMod:IsA("ModuleScript") then
-			local intTests = require(intTestsMod) :: any
-			TestRunner.RunSuite("ClientInteractionSuite", intTests.GetTestCases())
-		end
-
-		local worldMod = controllersFolder:FindFirstChild("WorldController")
-		local worldTestsFolder = if worldMod then worldMod:FindFirstChild("tests") else nil
-		local worldTestsMod = if worldTestsFolder then worldTestsFolder:FindFirstChild("WorldTests") else nil
-		if worldTestsMod and worldTestsMod:IsA("ModuleScript") then
-			local worldTests = require(worldTestsMod) :: any
-			TestRunner.RunSuite("ClientWorldSuite", worldTests.GetTestCases())
-		end
-	end
-end
-
+-- 1. Сначала регистрируем и запускаем все клиентские контроллеры (включая UIController) без задержек!
 local clientRegistry = Registry.new("Client")
 
 if controllersFolder then
@@ -72,7 +44,21 @@ end
 local initRes = clientRegistry:InitAll()
 if initRes.ok then
 	clientRegistry:StartAll()
-	log:Info("Client Bootstrap complete.")
+	log:Info("Client Bootstrap complete — UI mounted.")
 else
 	log:Error("Client Bootstrap failed: %s", tostring(initRes.error))
+end
+
+-- 2. Изолированные тесты ShopUI запускаем в фоновом потоке после старта UI
+if GameConfig.RunTestsOnStartup then
+	task.spawn(function()
+		local uiFolder = script:FindFirstChild("UI")
+		local shopUIFolder = if uiFolder then uiFolder:FindFirstChild("ShopUI") else nil
+		local shopTestsFolder = if shopUIFolder then shopUIFolder:FindFirstChild("tests") else nil
+		local shopTestsMod = if shopTestsFolder then shopTestsFolder:FindFirstChild("ShopUITests") else nil
+		if shopTestsMod and shopTestsMod:IsA("ModuleScript") then
+			local shopUITests = require(shopTestsMod) :: any
+			TestRunner.RunSuite("ClientShopUISuite", shopUITests.GetTestCases())
+		end
+	end)
 end

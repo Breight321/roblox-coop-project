@@ -33,7 +33,7 @@ Network.Events = {
 
 function Network.RegisterEvent(eventName: string): string
 	assert(type(eventName) == "string" and #eventName > 0, "eventName must be a non-empty string")
-	(Network.Events :: any)[eventName] = eventName
+	local eventsTable: any = Network.Events; eventsTable[eventName] = eventName
 	if RunService:IsServer() then
 		Remotes.getOrCreateEvent(eventName)
 	end
