@@ -2,7 +2,7 @@
 --[[
 	@module Network
 	@owner Agent A (Breight321) & Agent B (anarugod)
-	@description Универсальный типизированный сетевой слой поверх src/shared/Remotes.luau с поддержкой регистрации пользовательских событий.
+	@description Универсальный типизированный сетевой слой поверх src/shared/Remotes.luau с поддержкой регистрации пользовательских событий и контрактов Sunforge Expedition.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -22,6 +22,13 @@ Network.Events = {
 	ShopPurchaseResult = "ShopPurchaseResult",
 	Notification = "Notification",
 
+	-- Server -> Client (Sunforge Expedition Vertical Slice)
+	HarvestStateSync = "HarvestStateSync",
+	HarvestResult = "HarvestResult",
+	DepositResult = "DepositResult",
+	HarvestUpgradeResult = "HarvestUpgradeResult",
+	ServerProgressUpdated = "ServerProgressUpdated",
+
 	-- Client -> Server
 	RequestActionClick = "RequestActionClick",
 	RequestShopPurchase = "RequestShopPurchase",
@@ -29,11 +36,17 @@ Network.Events = {
 	RequestRebirth = "RequestRebirth",
 	RequestUnlockZone = "RequestUnlockZone",
 	RequestClaimQuest = "RequestClaimQuest",
+
+	-- Client -> Server (Sunforge Expedition Vertical Slice)
+	RequestHarvest = "RequestHarvest",
+	RequestDeposit = "RequestDeposit",
+	RequestHarvestUpgrade = "RequestHarvestUpgrade",
 }
 
 function Network.RegisterEvent(eventName: string): string
 	assert(type(eventName) == "string" and #eventName > 0, "eventName must be a non-empty string")
-	local eventsTable: any = Network.Events; eventsTable[eventName] = eventName
+	local eventsTable: any = Network.Events
+	eventsTable[eventName] = eventName
 	if RunService:IsServer() then
 		Remotes.getOrCreateEvent(eventName)
 	end

@@ -42,7 +42,7 @@ if initRes.ok then
 	serverRegistry:StartAll()
 	log:Info("Server Bootstrap complete.")
 
-	-- 3. Запуск модульных и интеграционных тестов фреймворка и экономики
+	-- 3. Запуск модульных и интеграционных тестов фреймворка, экономики и вертикального среза добычи
 	if GameConfig.RunTestsOnStartup then
 		local coreSummary = FrameworkTests.RunAll()
 		if coreSummary.failed > 0 then
@@ -57,6 +57,17 @@ if initRes.ok then
 			local econSummary = EconomyTests.RunAll()
 			if econSummary.failed > 0 then
 				log:Warn("EconomyAndShopBackendSuite reported %d failures!", econSummary.failed)
+			end
+		end
+
+		local harvestModule = if servicesFolder then servicesFolder:FindFirstChild("HarvestService") else nil
+		local harvestTestsFolder = if harvestModule then harvestModule:FindFirstChild("tests") else nil
+		local harvestTestsScript = if harvestTestsFolder then harvestTestsFolder:FindFirstChild("HarvestTests") else nil
+		if harvestTestsScript and harvestTestsScript:IsA("ModuleScript") then
+			local HarvestTests = require(harvestTestsScript) :: any
+			local harvestSummary = HarvestTests.RunAll()
+			if harvestSummary.failed > 0 then
+				log:Warn("SunforgeHarvestBackendSuite reported %d failures!", harvestSummary.failed)
 			end
 		end
 	end
