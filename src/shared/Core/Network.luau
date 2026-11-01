@@ -1,7 +1,7 @@
 --!strict
 --[[
 	@module Network
-	@owner Agent 1 (Breight321) & Agent 2 (anarugod)
+	@owner Agent A (Breight321) & Agent B (anarugod)
 	@description Единый типизированный сетевой слой поверх src/shared/Remotes.luau.
 ]]
 
@@ -19,6 +19,7 @@ Network.Events = {
 	InventoryUpdated = "InventoryUpdated",
 	ProgressionUpdated = "ProgressionUpdated",
 	QuestUpdated = "QuestUpdated",
+	ShopPurchaseResult = "ShopPurchaseResult",
 	Notification = "Notification",
 
 	-- Client -> Server

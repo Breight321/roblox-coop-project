@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module QuestService
-	@owner Agent 1 (Breight321)
-	@description Серверный бэкенд квестов: отслеживание прогресса и выдача наград.
+	@owner Agent A (Breight321)
+	@description Серверный бэкенд квестов: реактивное отслеживание целей и выдача наград.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -27,6 +27,11 @@ local playerDataService: any = nil
 local economyService: any = nil
 local progressionService: any = nil
 local claimConn: RBXScriptConnection? = nil
+local signalConnections: { any } = {}
+
+local function isRealPlayer(player: any): boolean
+	return typeof(player) == "Instance" and player:IsA("Player")
+end
 
 function QuestService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
@@ -36,8 +41,30 @@ function QuestService:Init(registry: any): ()
 end
 
 function QuestService:Start(): ()
+	table.insert(
+		signalConnections,
+		economyService.OnSimulatorClickProcessed:Connect(function(player: Player, coinsEarned: number)
+			self:IncrementProgress(player, "Clicks", 1)
+			self:IncrementProgress(player, "EarnCoins", coinsEarned)
+		end)
+	)
+
+	table.insert(
+		signalConnections,
+		progressionService.OnRebirth:Connect(function(player: Player)
+			self:IncrementProgress(player, "Rebirths", 1)
+		end)
+	)
+
+	table.insert(
+		signalConnections,
+		progressionService.OnZoneUnlocked:Connect(function(player: Player)
+			self:IncrementProgress(player, "UnlockZones", 1)
+		end)
+	)
+
 	claimConn = Network.OnServerEvent(Network.Events.RequestClaimQuest, function(player: Player, questId: any)
-		if type(questId) == "string" then
+		if type(questId) == "string" and #questId <= 64 then
 			self:ClaimReward(player, questId)
 		end
 	end)
@@ -60,6 +87,7 @@ function QuestService:IncrementProgress(
 		return
 	end
 
+	local updatedStates: { Types.QuestState } = {}
 	local newlyCompleted: { Types.QuestState } = {}
 
 	playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
@@ -70,6 +98,7 @@ function QuestService:IncrementProgress(
 				if qState and not qState.completed then
 					qState.progress = math.min(qState.target, qState.progress + amount)
 					anyChanged = true
+					table.insert(updatedStates, qState)
 					if qState.progress >= qState.target then
 						qState.completed = true
 						table.insert(newlyCompleted, qState)
@@ -80,9 +109,19 @@ function QuestService:IncrementProgress(
 		return anyChanged
 	end)
 
+	if isRealPlayer(player) then
+		for _, qState in ipairs(updatedStates) do
+			Network.FireClient(player, Network.Events.QuestUpdated, qState)
+		end
+	end
+
 	for _, qState in ipairs(newlyCompleted) do
 		self.OnQuestCompleted:Fire(player, qState.questId)
-		Network.FireClient(player, Network.Events.QuestUpdated, qState)
+		if isRealPlayer(player) then
+			local def = QuestsConfig[qState.questId]
+			local title = if def then def.title else qState.questId
+			Network.FireClient(player, Network.Events.Notification, "Reward", "Quest Completed: " .. title)
+		end
 	end
 end
 
@@ -123,8 +162,14 @@ function QuestService:ClaimReward(player: Player, questId: string): Types.Result
 		progressionService:AddXP(player, def.rewardXP)
 	end
 
-	if claimedState then
+	if claimedState and isRealPlayer(player) then
 		Network.FireClient(player, Network.Events.QuestUpdated, claimedState)
+		Network.FireClient(
+			player,
+			Network.Events.Notification,
+			"Reward",
+			string.format("Claimed +%d %s!", def.rewardAmount, def.rewardCurrency)
+		)
 	end
 	self.OnQuestClaimed:Fire(player, questId)
 	return Types.Ok(true)
@@ -135,6 +180,10 @@ function QuestService:Shutdown(): ()
 		claimConn:Disconnect()
 		claimConn = nil
 	end
+	for _, conn in ipairs(signalConnections) do
+		conn:Disconnect()
+	end
+	table.clear(signalConnections)
 	log:Info("Shutdown QuestService")
 end
 

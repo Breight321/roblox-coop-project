@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module InventoryService
-	@owner Agent 1 (Breight321)
-	@description Управление инвентарём игрока, выдача предметов и экипировка.
+	@owner Agent A (Breight321)
+	@description Управление инвентарём игрока, проверка лимитов слотов, выдача предметов и экипировка.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -21,12 +21,18 @@ local InventoryService = {
 	Name = "InventoryService",
 	Dependencies = { "PlayerDataService" },
 	OnItemGranted = Signal.new(),
+	OnItemRemoved = Signal.new(),
 	OnEquipmentChanged = Signal.new(),
 }
 
 local log = Logger.new("InventoryService")
 local playerDataService: any = nil
 local equipConn: RBXScriptConnection? = nil
+local lastEquipClock: { [any]: number } = {}
+
+local function isRealPlayer(player: any): boolean
+	return typeof(player) == "Instance" and player:IsA("Player")
+end
 
 function InventoryService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
@@ -35,9 +41,15 @@ end
 
 function InventoryService:Start(): ()
 	equipConn = Network.OnServerEvent(Network.Events.RequestEquipItem, function(player: Player, itemUid: any, equip: any)
-		if type(itemUid) == "string" and type(equip) == "boolean" then
-			self:EquipItem(player, itemUid, equip)
+		if type(itemUid) ~= "string" or #itemUid == 0 or #itemUid > 64 or type(equip) ~= "boolean" then
+			return
 		end
+		local now = os.clock()
+		if (now - (lastEquipClock[player] or 0)) < 0.1 then
+			return
+		end
+		lastEquipClock[player] = now
+		self:EquipItem(player, itemUid, equip)
 	end)
 end
 
@@ -49,7 +61,47 @@ function InventoryService:GetInventory(player: Player): { [string]: Types.Invent
 	return res.value.inventory
 end
 
+function InventoryService:GetItem(player: Player, itemUid: string): Types.InventoryItem?
+	if type(itemUid) ~= "string" then
+		return nil
+	end
+	local inv = self:GetInventory(player)
+	return inv[itemUid]
+end
+
+function InventoryService:HasItemByTemplate(player: Player, itemId: string): boolean
+	if type(itemId) ~= "string" then
+		return false
+	end
+	for _, item in pairs(self:GetInventory(player)) do
+		if item.itemId == itemId then
+			return true
+		end
+	end
+	return false
+end
+
+function InventoryService:GetCapacityInfo(player: Player): Types.InventoryCapacityInfo
+	local usedSlots = 0
+	local equippedPets = 0
+	for _, item in pairs(self:GetInventory(player)) do
+		usedSlots += 1
+		if item.category == "Pet" and item.equipped then
+			equippedPets += 1
+		end
+	end
+	return {
+		usedSlots = usedSlots,
+		maxSlots = GameConfig.Simulator.MaxInventorySlots,
+		equippedPetsCount = equippedPets,
+		maxEquippedPets = GameConfig.Simulator.MaxEquippedPets,
+	}
+end
+
 function InventoryService:GrantItem(player: Player, itemId: string): Types.Result<Types.InventoryItem, string>
+	if type(itemId) ~= "string" then
+		return Types.Err("UNKNOWN_ITEM_ID")
+	end
 	local def = ItemsConfig[itemId]
 	if not def then
 		return Types.Err("UNKNOWN_ITEM_ID")
@@ -90,11 +142,17 @@ function InventoryService:GrantItem(player: Player, itemId: string): Types.Resul
 	end
 
 	self.OnItemGranted:Fire(player, grantedItem)
-	Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	if isRealPlayer(player) then
+		Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	end
 	return Types.Ok(grantedItem)
 end
 
 function InventoryService:RemoveItem(player: Player, itemUid: string): Types.Result<boolean, string>
+	if type(itemUid) ~= "string" or itemUid == "starter_wand_default" then
+		return Types.Err("ITEM_NOT_FOUND")
+	end
+
 	local removed = false
 	playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
 		if profile.inventory[itemUid] then
@@ -109,7 +167,10 @@ function InventoryService:RemoveItem(player: Player, itemUid: string): Types.Res
 		return Types.Err("ITEM_NOT_FOUND")
 	end
 
-	Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	self.OnItemRemoved:Fire(player, itemUid)
+	if isRealPlayer(player) then
+		Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	end
 	return Types.Ok(true)
 end
 
@@ -153,6 +214,14 @@ function InventoryService:EquipItem(
 	end)
 
 	if errCode then
+		if isRealPlayer(player) and errCode == "MAX_PETS_EQUIPPED" then
+			Network.FireClient(
+				player,
+				Network.Events.Notification,
+				"Warning",
+				string.format("Maximum %d pets can be equipped!", GameConfig.Simulator.MaxEquippedPets)
+			)
+		end
 		return Types.Err(errCode)
 	end
 	if not targetItem then
@@ -160,7 +229,9 @@ function InventoryService:EquipItem(
 	end
 
 	self.OnEquipmentChanged:Fire(player, targetItem)
-	Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	if isRealPlayer(player) then
+		Network.FireClient(player, Network.Events.InventoryUpdated, self:GetInventory(player))
+	end
 	return Types.Ok(targetItem)
 end
 
@@ -182,6 +253,7 @@ function InventoryService:Shutdown(): ()
 		equipConn:Disconnect()
 		equipConn = nil
 	end
+	table.clear(lastEquipClock)
 	log:Info("Shutdown InventoryService")
 end
 

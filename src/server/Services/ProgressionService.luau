@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module ProgressionService
-	@owner Agent 1 (Breight321)
-	@description Система уровней, опыта (XP), перерождений (Rebirths) и открытия зон.
+	@owner Agent A (Breight321)
+	@description Система уровней, опыта (XP), перерождений (Rebirths) и открытия зон с реактивной подпиской на клики.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -26,7 +26,12 @@ local ProgressionService = {
 local log = Logger.new("ProgressionService")
 local playerDataService: any = nil
 local economyService: any = nil
-local connections: { RBXScriptConnection } = {}
+local rbxConnections: { RBXScriptConnection } = {}
+local signalConnections: { any } = {}
+
+local function isRealPlayer(player: any): boolean
+	return typeof(player) == "Instance" and player:IsA("Player")
+end
 
 function ProgressionService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
@@ -36,16 +41,23 @@ end
 
 function ProgressionService:Start(): ()
 	table.insert(
-		connections,
+		signalConnections,
+		economyService.OnSimulatorClickProcessed:Connect(function(player: Player)
+			self:AddXP(player, GameConfig.Simulator.BaseXPPerClick)
+		end)
+	)
+
+	table.insert(
+		rbxConnections,
 		Network.OnServerEvent(Network.Events.RequestRebirth, function(player: Player)
 			self:PerformRebirth(player)
 		end)
 	)
 
 	table.insert(
-		connections,
+		rbxConnections,
 		Network.OnServerEvent(Network.Events.RequestUnlockZone, function(player: Player, zoneId: any)
-			if type(zoneId) == "string" then
+			if type(zoneId) == "string" and #zoneId <= 64 then
 				self:UnlockZone(player, zoneId)
 			end
 		end)
@@ -76,12 +88,17 @@ end
 function ProgressionService:PerformRebirth(player: Player): Types.Result<number, string>
 	local canRes = self:CanRebirth(player)
 	if not canRes.ok then
+		if isRealPlayer(player) then
+			Network.FireClient(player, Network.Events.Notification, "Error", "Not enough Coins for Rebirth!")
+		end
 		return Types.Err(canRes.error or "CANNOT_REBIRTH")
 	end
 
 	local newRebirths = 0
 	local updateRes = playerDataService:UpdateProfile(player, function(profile: Types.PlayerProfileData)
 		profile.currencies.Coins = 0
+		profile.level = 1
+		profile.xp = 0
 		profile.rebirths += 1
 		newRebirths = profile.rebirths
 		return true
@@ -94,7 +111,8 @@ function ProgressionService:PerformRebirth(player: Player): Types.Result<number,
 	economyService:AddCurrency(player, "Gems", GameConfig.Progression.RebirthGemsReward, "RebirthReward")
 
 	local prof = playerDataService:GetProfile(player).value
-	if prof then
+	if prof and isRealPlayer(player) then
+		Network.FireClient(player, Network.Events.CurrencyUpdated, "Coins", 0, 0)
 		Network.FireClient(
 			player,
 			Network.Events.ProgressionUpdated,
@@ -102,6 +120,12 @@ function ProgressionService:PerformRebirth(player: Player): Types.Result<number,
 			prof.xp,
 			prof.rebirths,
 			prof.unlockedZones
+		)
+		Network.FireClient(
+			player,
+			Network.Events.Notification,
+			"Reward",
+			string.format("Rebirth #%d complete! +%d Gems!", newRebirths, GameConfig.Progression.RebirthGemsReward)
 		)
 	end
 
@@ -132,12 +156,28 @@ function ProgressionService:UnlockZone(player: Player, zoneId: string): Types.Re
 	end
 
 	if profRes.value.rebirths < zoneDef.requiredRebirths then
+		if isRealPlayer(player) then
+			Network.FireClient(
+				player,
+				Network.Events.Notification,
+				"Error",
+				string.format("Requires %d Rebirths to unlock %s!", zoneDef.requiredRebirths, zoneDef.displayName)
+			)
+		end
 		return Types.Err("INSUFFICIENT_REBIRTHS")
 	end
 
 	if zoneDef.costAmount > 0 then
-		local deductRes = economyService:RemoveCurrency(player, zoneDef.costCurrency, zoneDef.costAmount, "UnlockZone")
+		local deductRes = economyService:RemoveCurrency(player, zoneDef.costCurrency, zoneDef.costAmount, "UnlockZone:" .. zoneId)
 		if not deductRes.ok then
+			if isRealPlayer(player) then
+				Network.FireClient(
+					player,
+					Network.Events.Notification,
+					"Error",
+					string.format("Need %d %s to unlock %s!", zoneDef.costAmount, zoneDef.costCurrency, zoneDef.displayName)
+				)
+			end
 			return Types.Err(deductRes.error or "INSUFFICIENT_FUNDS")
 		end
 	end
@@ -148,7 +188,7 @@ function ProgressionService:UnlockZone(player: Player, zoneId: string): Types.Re
 	end)
 
 	local prof = playerDataService:GetProfile(player).value
-	if prof then
+	if prof and isRealPlayer(player) then
 		Network.FireClient(
 			player,
 			Network.Events.ProgressionUpdated,
@@ -156,6 +196,12 @@ function ProgressionService:UnlockZone(player: Player, zoneId: string): Types.Re
 			prof.xp,
 			prof.rebirths,
 			prof.unlockedZones
+		)
+		Network.FireClient(
+			player,
+			Network.Events.Notification,
+			"Success",
+			string.format("Unlocked %s!", zoneDef.displayName)
 		)
 	end
 
@@ -193,14 +239,30 @@ function ProgressionService:AddXP(
 		return true
 	end)
 
+	local prof = playerDataService:GetProfile(player).value
+	if prof and isRealPlayer(player) then
+		Network.FireClient(
+			player,
+			Network.Events.ProgressionUpdated,
+			prof.level,
+			prof.xp,
+			prof.rebirths,
+			prof.unlockedZones
+		)
+	end
+
 	return Types.Ok({ level = newLevel, xp = newXP })
 end
 
 function ProgressionService:Shutdown(): ()
-	for _, conn in ipairs(connections) do
+	for _, conn in ipairs(rbxConnections) do
 		conn:Disconnect()
 	end
-	table.clear(connections)
+	table.clear(rbxConnections)
+	for _, conn in ipairs(signalConnections) do
+		conn:Disconnect()
+	end
+	table.clear(signalConnections)
 	log:Info("Shutdown ProgressionService")
 end
 

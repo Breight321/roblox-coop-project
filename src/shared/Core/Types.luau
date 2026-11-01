@@ -1,8 +1,8 @@
 --!strict
 --[[
 	@module Types
-	@owner Shared (Agent 1: Breight321 & Agent 2: anarugod)
-	@description Единые строгие Luau-типы для всех 15 систем Roblox Simulator Framework.
+	@owner Shared (Agent A: Breight321 & Agent B: anarugod)
+	@description Единые строгие Luau-типы для всех систем Roblox Simulator Framework.
 ]]
 
 export type Result<T, E = string> = {
@@ -14,6 +14,8 @@ export type Result<T, E = string> = {
 export type CurrencyId = "Coins" | "Gems"
 
 export type ItemCategory = "Tool" | "Pet" | "Consumable"
+
+export type ShopCategory = "Tools" | "Pets" | "Boosts"
 
 export type Rarity = "Common" | "Uncommon" | "Rare" | "Epic" | "Legendary" | "Mythic"
 
@@ -48,10 +50,49 @@ export type ZoneDef = {
 export type ShopItemDef = {
 	id: string,
 	itemId: string,
+	category: ShopCategory?,
 	currencyId: CurrencyId,
 	price: number,
 	requiredZoneId: string?,
 	requiredRebirths: number?,
+}
+
+export type ShopPurchaseResponse = {
+	ok: boolean,
+	shopItemId: string,
+	itemId: string?,
+	itemUid: string?,
+	currencyId: CurrencyId?,
+	pricePaid: number?,
+	newBalance: number?,
+	errorCode: string?,
+	message: string,
+}
+
+export type MultiplierBreakdown = {
+	base: number,
+	rebirthBonus: number,
+	equippedItemsBonus: number,
+	zoneBonus: number,
+	total: number,
+}
+
+export type EconomyTransactionRecord = {
+	id: string,
+	timestamp: number,
+	userId: number,
+	currencyId: CurrencyId,
+	delta: number,
+	balanceBefore: number,
+	balanceAfter: number,
+	reason: string,
+}
+
+export type InventoryCapacityInfo = {
+	usedSlots: number,
+	maxSlots: number,
+	equippedPetsCount: number,
+	maxEquippedPets: number,
 }
 
 export type QuestDef = {
