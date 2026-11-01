@@ -2,7 +2,7 @@
 --[[
 	@module InteractionController
 	@owner Agent 2 (anarugod)
-	@description Контроллер ввода игрока и клиентских намерений: клики симулятора, покупки, экипировка, ребирты и квесты.
+	@description Контроллер ввода игрока и клиентских намерений: клики симулятора, горячие клавиши окон, покупки, экипировка, ребирты и квесты.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -32,6 +32,13 @@ local lastClickClock = 0
 local rbxConnections: { RBXScriptConnection } = {}
 local signalConnections: { Signal.SignalConnection } = {}
 
+local SCREEN_HOTKEYS: { [Enum.KeyCode]: string } = {
+	[Enum.KeyCode.F] = "Shop",
+	[Enum.KeyCode.B] = "Inventory",
+	[Enum.KeyCode.Q] = "Quests",
+	[Enum.KeyCode.R] = "Rebirth",
+}
+
 function InteractionController:Init(registry: any): ()
 	uiController = registry:Get("UIController")
 	worldController = registry:Get("WorldController")
@@ -54,12 +61,26 @@ function InteractionController:Start(): ()
 			if gameProcessed then
 				return
 			end
+
+			if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.ButtonB then
+				if uiController:IsAnyWindowOpen() then
+					uiController:CloseAllScreens()
+				end
+				return
+			end
+
+			local hotkeyScreen = SCREEN_HOTKEYS[input.KeyCode]
+			if hotkeyScreen then
+				uiController:ToggleScreen(hotkeyScreen)
+				return
+			end
+
 			if
 				input.UserInputType == Enum.UserInputType.MouseButton1
 				or input.UserInputType == Enum.UserInputType.Touch
 				or input.KeyCode == Enum.KeyCode.ButtonR2
 			then
-				if uiController:GetActiveScreen() == nil then
+				if not uiController:IsAnyWindowOpen() then
 					self:TriggerPrimaryAction()
 				end
 			end
