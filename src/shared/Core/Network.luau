@@ -2,7 +2,7 @@
 --[[
 	@module Network
 	@owner Agent A (Breight321) & Agent B (anarugod)
-	@description Универсальный типизированный сетевой слой поверх src/shared/Remotes.luau с поддержкой регистрации пользовательских событий и контрактов Sunforge Expedition.
+	@description Универсальный типизированный сетевой слой поверх src/shared/Remotes.luau с поддержкой регистрации пользовательских событий, Sunforge Expedition и Combat Loop v1.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -29,6 +29,17 @@ Network.Events = {
 	HarvestUpgradeResult = "HarvestUpgradeResult",
 	ServerProgressUpdated = "ServerProgressUpdated",
 
+	-- Server -> Client (Combat Loop v1: Mobs, Body Parts, Chests, Skill Tree, PvP Arena)
+	CombatResult = "CombatResult",
+	MobDefeated = "MobDefeated",
+	ChestResult = "ChestResult",
+	ChestStateSync = "ChestStateSync",
+	SkillTreeSync = "SkillTreeSync",
+	SkillUnlockResult = "SkillUnlockResult",
+	StatsUpdated = "StatsUpdated",
+	ArenaStateChanged = "ArenaStateChanged",
+	PvPCombatResult = "PvPCombatResult",
+
 	-- Client -> Server
 	RequestActionClick = "RequestActionClick",
 	RequestShopPurchase = "RequestShopPurchase",
@@ -41,6 +52,14 @@ Network.Events = {
 	RequestHarvest = "RequestHarvest",
 	RequestDeposit = "RequestDeposit",
 	RequestHarvestUpgrade = "RequestHarvestUpgrade",
+
+	-- Client -> Server (Combat Loop v1: Mobs, Body Parts, Chests, Skill Tree, PvP Arena)
+	RequestAttackMob = "RequestAttackMob",
+	RequestOpenChest = "RequestOpenChest",
+	RequestUnlockSkill = "RequestUnlockSkill",
+	RequestArenaEnter = "RequestArenaEnter",
+	RequestArenaLeave = "RequestArenaLeave",
+	RequestPvPAttack = "RequestPvPAttack",
 }
 
 function Network.RegisterEvent(eventName: string): string

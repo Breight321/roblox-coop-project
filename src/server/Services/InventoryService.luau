@@ -2,7 +2,7 @@
 --[[
 	@module InventoryService (Module 5: Inventory)
 	@owner Agent A (Breight321)
-	@description Универсальная система инвентаря: хранение предметов, стекирование (quantity), настраиваемые лимиты слотов экипировки по категориям и опциональный адаптер для EconomyService.
+	@description Универсальный сервис инвентаря: хранение предметов, стекирование (quantity), настраиваемые лимиты слотов экипировки по категориям (включая слоты деталей тела BodyHead, BodyArms, BodyTorso, BodyLegs) и адаптер множителей для EconomyService.
 ]]
 
 local HttpService = game:GetService("HttpService")
@@ -30,12 +30,16 @@ local playerDataService: any = nil
 local equipConn: RBXScriptConnection? = nil
 local lastEquipClock: { [any]: number } = {}
 
--- Настраиваемые лимиты одновременной экипировки по любой категории предметов
+-- Настраиваемые лимиты одновременной экипировки по любой категории предметов (включая 4 слота тела)
 local categoryEquipLimits: { [string]: number } = {
 	Tool = 1,
 	Pet = GameConfig.Simulator.MaxEquippedPets,
 	Weapon = 1,
 	Armor = 1,
+	BodyHead = 1,
+	BodyArms = 1,
+	BodyTorso = 1,
+	BodyLegs = 1,
 }
 
 local function isRealPlayer(player: any): boolean
@@ -51,7 +55,7 @@ end
 function InventoryService:Init(registry: any): ()
 	playerDataService = registry:Get("PlayerDataService")
 
-	-- Опциональная интеграция с EconomyService через публичный адаптер без жёсткой зависимости
+	-- Опциональная регистрация в EconomyService через публичный адаптер без жёсткой зависимости
 	local economyService = registry:TryGet("EconomyService")
 	if economyService and type(economyService.RegisterMultiplierModifier) == "function" then
 		economyService:RegisterMultiplierModifier("EquippedItemsBonus", function(player: any, currencyId: string)
@@ -191,6 +195,7 @@ function InventoryService:GrantItem(
 			level = 1,
 			quantity = grantQty,
 			acquiredAt = os.time(),
+			metadata = def.metadata,
 		}
 		profile.inventory[uid] = newItem
 		grantedItem = newItem

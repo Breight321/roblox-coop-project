@@ -8,7 +8,7 @@
 local GameConfig = {
 	GameVersion = "0.1.0",
 	DataSchemaVersion = 1,
-	DataStoreName = "SimulatorProfileStore_v1",
+	DataStoreName = "Project1ProfileStore_v1",
 	AutoSaveIntervalSeconds = 60,
 	RunTestsOnStartup = true,
 
