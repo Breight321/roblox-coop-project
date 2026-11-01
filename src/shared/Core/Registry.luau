@@ -132,7 +132,7 @@ function Registry:InitAll(): Types.Result<{ string }, string>
 		local mod = self._modules[name]
 		if type(mod.Init) == "function" then
 			local ok, err = pcall(function()
-				(mod.Init :: any)(mod, self)
+				local fn: any = mod.Init; fn(mod, self)
 			end)
 			if not ok then
 				local errMsg = string.format("Failed to Init module '%s': %s", name, tostring(err))
@@ -163,7 +163,7 @@ function Registry:StartAll(): Types.Result<{ string }, string>
 		local mod = self._modules[name]
 		if type(mod.Start) == "function" then
 			local ok, err = pcall(function()
-				(mod.Start :: any)(mod)
+				local fn: any = mod.Start; fn(mod)
 			end)
 			if not ok then
 				local errMsg = string.format("Failed to Start module '%s': %s", name, tostring(err))
@@ -187,7 +187,7 @@ function Registry:ShutdownAll(): ()
 		local mod = self._modules[name]
 		if mod and type(mod.Shutdown) == "function" then
 			local ok, err = pcall(function()
-				(mod.Shutdown :: any)(mod)
+				local fn: any = mod.Shutdown; fn(mod)
 			end)
 			if not ok then
 				self._log:Warn("Error shutting down '%s': %s", name, tostring(err))

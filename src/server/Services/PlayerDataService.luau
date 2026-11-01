@@ -247,7 +247,7 @@ local function syncLeaderstats(player: any, profile: Types.PlayerProfileData): (
 				valObj.Name = def.displayName
 				valObj.Parent = leaderstats
 			end
-			(valObj :: IntValue).Value = math.floor(profile.currencies[currencyId] or 0)
+			local intVal = valObj :: IntValue; intVal.Value = math.floor(profile.currencies[currencyId] or 0)
 		end
 	end
 
@@ -257,7 +257,7 @@ local function syncLeaderstats(player: any, profile: Types.PlayerProfileData): (
 		rebirthsObj.Name = "Rebirths"
 		rebirthsObj.Parent = leaderstats
 	end
-	(rebirthsObj :: IntValue).Value = profile.rebirths
+	local intReb = rebirthsObj :: IntValue; intReb.Value = profile.rebirths
 end
 
 function PlayerDataService:Init(_registry: any): ()
@@ -302,7 +302,7 @@ function PlayerDataService:_loadFromStore(player: any): Types.PlayerProfileData
 	local loadedProfile: Types.PlayerProfileData? = nil
 	for attempt = 1, 3 do
 		local ok, err = pcall(function()
-			(liveDataStore :: DataStore):UpdateAsync(key, function(oldEnvelope: any)
+			local ds = liveDataStore :: DataStore; ds:UpdateAsync(key, function(oldEnvelope: any)
 				if type(oldEnvelope) == "table" and type(oldEnvelope.meta) == "table" then
 					local ownerJob = oldEnvelope.meta.sessionJobId
 					local lockTime = oldEnvelope.meta.sessionLockTimestamp or 0
@@ -349,6 +349,11 @@ function PlayerDataService:Start(): ()
 		syncLeaderstats(player, profile)
 		self.OnProfileLoaded:Fire(player, profile)
 		Network.FireClient(player, Network.Events.PlayerDataSync, profile)
+		task.delay(0.5, function()
+			if profiles[player] then
+				Network.FireClient(player, Network.Events.PlayerDataSync, profiles[player])
+			end
+		end)
 		log:Info("Loaded profile for %s", player.Name)
 	end
 
@@ -450,7 +455,7 @@ function PlayerDataService:SaveProfile(player: Player, releaseLock: boolean?): T
 	end
 
 	local ok, err = pcall(function()
-		(liveDataStore :: DataStore):UpdateAsync(key, function(oldEnvelope: any)
+		local ds = liveDataStore :: DataStore; ds:UpdateAsync(key, function(oldEnvelope: any)
 			local prevSaves = if type(oldEnvelope) == "table" and type(oldEnvelope.meta) == "table"
 				then (oldEnvelope.meta.saveCount or 0)
 				else 0
