@@ -126,6 +126,13 @@ local function getParticipantCount(): number
 	return count
 end
 
+local function getArenaSpawnPoint(index: number): Vector3
+	local arenaCfg = CombatConfig.Arena
+	local angle = (index - 1) * (math.pi / 2)
+	local offset = Vector3.new(math.cos(angle) * 10, 0, math.sin(angle) * 10)
+	return arenaCfg.ArenaCenter + offset
+end
+
 local function ensureArenaWorldMarkers(): ()
 	local worldFolder = Workspace:FindFirstChild("CombatWorld") :: Folder?
 	if not worldFolder then
@@ -155,7 +162,7 @@ local function ensureArenaWorldMarkers(): ()
 		entrance.Color = Color3.fromRGB(255, 75, 95)
 		entrance.Size = Vector3.new(10, 0.8, 10)
 		entrance.Position = arenaCfg.EntrancePosition + Vector3.new(0, 0.4, 0)
-		entrance:SetAttribute("ArenaId", arenaCfg.Id)
+		entrance:SetAttribute("ArenaId", arenaCfg.ArenaId)
 		entrance:SetAttribute("MinPlayerLevel", arenaCfg.MinPlayerLevel)
 		entrance.Parent = validArena
 	end
@@ -167,9 +174,9 @@ local function ensureArenaWorldMarkers(): ()
 		floor.CanCollide = true
 		floor.Material = Enum.Material.Cobblestone
 		floor.Color = Color3.fromRGB(68, 56, 74)
-		floor.Size = Vector3.new(arenaCfg.Radius * 2, 2, arenaCfg.Radius * 2)
-		floor.Position = arenaCfg.CenterPosition - Vector3.new(0, 1, 0)
-		floor:SetAttribute("ArenaId", arenaCfg.Id)
+		floor.Size = Vector3.new(arenaCfg.ArenaRadius * 2, 2, arenaCfg.ArenaRadius * 2)
+		floor.Position = arenaCfg.ArenaCenter - Vector3.new(0, 1, 0)
+		floor:SetAttribute("ArenaId", arenaCfg.ArenaId)
 		floor.Parent = validArena
 	end
 end
@@ -269,54 +276,57 @@ function ArenaService:IsInArena(player: any): boolean
 end
 
 function ArenaService:EnterArena(player: any): Types.ArenaStatePayload
-	local function fail(code: Types.ArenaErrorCode, inArena: boolean): Types.ArenaStatePayload
+	local arenaCfg = CombatConfig.Arena
+	local function fail(code: Types.ArenaErrorCode, msg: string, inArena: boolean): Types.ArenaStatePayload
 		local part = participants[player]
 		return {
-			ok = false,
-			errorCode = code,
 			inArena = inArena,
-			pvpEnabled = inArena,
-			combatTagExpiresAt = if part then part.combatTagUntil else 0,
-			participantsCount = getParticipantCount(),
+			arenaId = arenaCfg.ArenaId,
+			combatTaggedUntil = if part then part.combatTagUntil else 0,
+			reason = code,
+			errorCode = code,
+			message = msg,
 		}
 	end
 
 	if not isValidPlayerKey(player) then
-		return fail("INVALID_PLAYER", false)
+		return fail("INVALID_PLAYER", "Некорректный игрок.", false)
 	end
 
 	local profile = unwrapProfile(player)
 	if not profile then
-		return fail("PROFILE_NOT_LOADED", false)
+		return fail("PROFILE_NOT_LOADED", "Профиль ещё не загружен.", false)
 	end
 
 	if participants[player] ~= nil then
-		return fail("ALREADY_IN_ARENA", true)
+		return fail("ALREADY_IN_ARENA", "Вы уже находитесь в PvP-арене.", true)
 	end
 
-	local arenaCfg = CombatConfig.Arena
 	if profile.level < arenaCfg.MinPlayerLevel then
-		return fail("LEVEL_TOO_LOW", false)
+		return fail(
+			"LEVEL_TOO_LOW",
+			string.format("Требуется уровень %d для входа в арену.", arenaCfg.MinPlayerLevel),
+			false
+		)
 	end
 
 	local hasChar, isDead, playerPos = getPlayerCombatState(player, arenaCfg.EntrancePosition)
 	if not hasChar or not playerPos then
-		return fail("CHARACTER_NOT_READY", false)
+		return fail("CHARACTER_NOT_READY", "Персонаж не готов.", false)
 	end
 	if isDead then
-		return fail("PLAYER_DEAD", false)
+		return fail("PLAYER_DEAD", "Персонаж повержен.", false)
 	end
 
 	local distToEntrance = (playerPos - arenaCfg.EntrancePosition).Magnitude
 	if distToEntrance > arenaCfg.EntranceRadius then
-		return fail("OUT_OF_RANGE", false)
+		return fail("NOT_AT_ARENA_ENTRANCE", "Подойдите ко входу в арену.", false)
 	end
 
 	local pStats = statsService:GetStats(player)
 	local userId = getPlayerUserId(player)
-	local spawnList = arenaCfg.SpawnPoints
-	local spawnIdx = (getParticipantCount() % #spawnList) + 1
-	local spawnPos = spawnList[spawnIdx] or arenaCfg.CenterPosition
+	local spawnIdx = getParticipantCount() + 1
+	local spawnPos = getArenaSpawnPoint(spawnIdx)
 
 	local newPart: ArenaParticipant = {
 		player = player,
@@ -346,12 +356,12 @@ function ArenaService:EnterArena(player: any): Types.ArenaStatePayload
 	end
 
 	local payload: Types.ArenaStatePayload = {
-		ok = true,
-		errorCode = nil,
 		inArena = true,
-		pvpEnabled = true,
-		combatTagExpiresAt = 0,
-		participantsCount = getParticipantCount(),
+		arenaId = arenaCfg.ArenaId,
+		combatTaggedUntil = 0,
+		reason = "Entered",
+		errorCode = nil,
+		message = string.format("Вы вошли в %s (режим PvP активен).", arenaCfg.DisplayName),
 	}
 
 	self.OnPlayerEnteredArena:Fire(player, payload)
@@ -359,29 +369,30 @@ function ArenaService:EnterArena(player: any): Types.ArenaStatePayload
 end
 
 function ArenaService:LeaveArena(player: any): Types.ArenaStatePayload
-	local function fail(code: Types.ArenaErrorCode, inArena: boolean, tagUntil: number): Types.ArenaStatePayload
+	local arenaCfg = CombatConfig.Arena
+	local function fail(code: Types.ArenaErrorCode, msg: string, inArena: boolean, tagUntil: number): Types.ArenaStatePayload
 		return {
-			ok = false,
-			errorCode = code,
 			inArena = inArena,
-			pvpEnabled = inArena,
-			combatTagExpiresAt = tagUntil,
-			participantsCount = getParticipantCount(),
+			arenaId = arenaCfg.ArenaId,
+			combatTaggedUntil = tagUntil,
+			reason = code,
+			errorCode = code,
+			message = msg,
 		}
 	end
 
 	if not isValidPlayerKey(player) then
-		return fail("INVALID_PLAYER", false, 0)
+		return fail("INVALID_PLAYER", "Некорректный игрок.", false, 0)
 	end
 
 	local part = participants[player]
 	if not part then
-		return fail("NOT_IN_ARENA", false, 0)
+		return fail("NOT_IN_ARENA", "Вы не находитесь в арене.", false, 0)
 	end
 
 	local now = os.clock()
 	if now < part.combatTagUntil then
-		return fail("COMBAT_TAGGED", true, part.combatTagUntil)
+		return fail("COMBAT_TAGGED", "Нельзя покинуть арену во время активного боя!", true, part.combatTagUntil)
 	end
 
 	participants[player] = nil
@@ -390,7 +401,7 @@ function ArenaService:LeaveArena(player: any): Types.ArenaStatePayload
 	end
 
 	setPlayerPvPAttribute(player, false)
-	teleportPlayerCharacter(player, CombatConfig.Arena.EntrancePosition)
+	teleportPlayerCharacter(player, arenaCfg.SafeExitPosition)
 
 	if isRealPlayer(player) then
 		local char = (player :: Player).Character
@@ -403,12 +414,12 @@ function ArenaService:LeaveArena(player: any): Types.ArenaStatePayload
 	end
 
 	local payload: Types.ArenaStatePayload = {
-		ok = true,
-		errorCode = nil,
 		inArena = false,
-		pvpEnabled = false,
-		combatTagExpiresAt = 0,
-		participantsCount = getParticipantCount(),
+		arenaId = arenaCfg.ArenaId,
+		combatTaggedUntil = 0,
+		reason = "Left",
+		errorCode = nil,
+		message = "Вы вернулись в безопасную зону (PvE).",
 	}
 
 	self.OnPlayerLeftArena:Fire(player, payload)
@@ -417,80 +428,83 @@ end
 
 function ArenaService:AttackPlayer(attacker: any, targetUserId: number): Types.PvPCombatResultPayload
 	local attackerId = getPlayerUserId(attacker)
-	local function fail(code: Types.ArenaErrorCode, targetPart: ArenaParticipant?): Types.PvPCombatResultPayload
+	local function fail(code: Types.ArenaErrorCode, msg: string, targetPart: ArenaParticipant?): Types.PvPCombatResultPayload
 		return {
 			ok = false,
-			errorCode = code,
 			attackerUserId = attackerId,
 			targetUserId = targetUserId,
 			damageDealt = 0,
-			isCrit = false,
-			targetRemainingHealth = if targetPart then targetPart.health else 0,
+			isCritical = false,
+			targetHealth = if targetPart then targetPart.health else 0,
 			targetMaxHealth = if targetPart then targetPart.maxHealth else 0,
-			targetDefeated = false,
+			killed = false,
+			errorCode = code,
+			message = msg,
 		}
 	end
 
 	if not isValidPlayerKey(attacker) then
-		return fail("INVALID_PLAYER", nil)
+		return fail("INVALID_PLAYER", "Некорректный игрок.", nil)
 	end
 
 	local attackerProfile = unwrapProfile(attacker)
 	if not attackerProfile then
-		return fail("PROFILE_NOT_LOADED", nil)
+		return fail("PROFILE_NOT_LOADED", "Профиль ещё не загружен.", nil)
 	end
 
 	-- Защита мирных зон: атакующий обязан находиться в добровольной PvP-арене
 	local attackerPart = participants[attacker]
 	if not attackerPart then
-		return fail("NOT_IN_ARENA", nil)
+		return fail("NOT_IN_ARENA", "PvP разрешено только внутри арены.", nil)
 	end
 
-	if type(targetUserId) ~= "number" or targetUserId == 0 or targetUserId == attackerId then
-		return fail("INVALID_TARGET", nil)
+	if type(targetUserId) ~= "number" or targetUserId == 0 then
+		return fail("INVALID_TARGET", "Некорректная цель.", nil)
+	end
+	if targetUserId == attackerId then
+		return fail("SELF_TARGET", "Нельзя атаковать самого себя.", nil)
 	end
 
 	-- Ищем цель: только участники арены могут получать PvP-урон
 	local targetPart = participantsByUserId[targetUserId]
 	if not targetPart then
-		-- Проверим, существует ли вообще такой игрок вне арены, чтобы вернуть точный код TARGET_NOT_IN_ARENA
 		local outsideReal = Players:GetPlayerByUserId(targetUserId)
 		local outsideTest = testPlayersByUserId[targetUserId]
 		if outsideReal or outsideTest then
-			return fail("TARGET_NOT_IN_ARENA", nil)
+			return fail("TARGET_NOT_IN_ARENA", "Цель находится в безопасной зоне вне арены.", nil)
 		end
-		return fail("INVALID_TARGET", nil)
+		return fail("INVALID_TARGET", "Цель не найдена.", nil)
 	end
 
 	local targetPlayer = targetPart.player
 	local arenaCfg = CombatConfig.Arena
 
-	local attHasChar, attDead, attPos = getPlayerCombatState(attacker, arenaCfg.CenterPosition)
+	local attHasChar, attDead, attPos = getPlayerCombatState(attacker, arenaCfg.ArenaCenter)
 	if not attHasChar or not attPos then
-		return fail("CHARACTER_NOT_READY", targetPart)
+		return fail("CHARACTER_NOT_READY", "Персонаж не готов.", targetPart)
 	end
 	if attDead or attackerPart.health <= 0 then
-		return fail("PLAYER_DEAD", targetPart)
+		return fail("PLAYER_DEAD", "Персонаж повержен.", targetPart)
 	end
 
-	local tgtHasChar, tgtDead, tgtPos = getPlayerCombatState(targetPlayer, arenaCfg.CenterPosition)
+	local tgtHasChar, tgtDead, tgtPos = getPlayerCombatState(targetPlayer, arenaCfg.ArenaCenter)
 	if not tgtHasChar or not tgtPos then
-		return fail("INVALID_TARGET", targetPart)
+		return fail("INVALID_TARGET", "Цель недоступна.", targetPart)
 	end
 	if tgtDead or targetPart.health <= 0 then
-		return fail("TARGET_DEAD", targetPart)
+		return fail("INVALID_TARGET", "Цель уже повержена.", targetPart)
 	end
 
 	local dist = (attPos - tgtPos).Magnitude
-	if dist > arenaCfg.Balance.MaxAttackRange then
-		return fail("OUT_OF_RANGE", targetPart)
+	if dist > arenaCfg.PvPAttackRange then
+		return fail("OUT_OF_RANGE", "Соперник слишком далеко.", targetPart)
 	end
 
 	local now = os.clock()
 	local attStats = statsService:GetStats(attacker)
-	local effectiveCooldown = math.max(arenaCfg.Balance.AttackCooldownFloor, attStats.attackCooldown)
+	local effectiveCooldown = math.max(arenaCfg.PvPAttackCooldownSeconds, attStats.attackCooldown)
 	if (now - attackerPart.lastAttackAt) < effectiveCooldown then
-		return fail("ATTACK_COOLDOWN", targetPart)
+		return fail("ATTACK_COOLDOWN", "Атака перезаряжается.", targetPart)
 	end
 	attackerPart.lastAttackAt = now
 
@@ -501,9 +515,9 @@ function ArenaService:AttackPlayer(attacker: any, targetUserId: number): Types.P
 		targetPart.health = targetPart.maxHealth
 	end
 
-	local isCrit = defaultRng:NextNumber() < attStats.critChance
-	local critMult = if isCrit then math.min(attStats.critMultiplier, arenaCfg.Balance.CritMultiplierCap) else 1.0
-	local scaledRaw = attStats.damage * arenaCfg.Balance.DamageScale * critMult
+	local isCritical = defaultRng:NextNumber() < attStats.critChance
+	local critMult = if isCritical then math.min(attStats.critMultiplier, arenaCfg.Balance.CritMultiplierCap) else 1.0
+	local scaledRaw = attStats.attackPower * arenaCfg.Balance.DamageScale * critMult
 	local effectiveDefense = tgtStats.defense * arenaCfg.Balance.DefenseEffectivenessMultiplier
 	local mitigated = statsService:ComputeMitigatedDamage(scaledRaw, effectiveDefense)
 	local maxCap = math.max(1, math.floor(targetPart.maxHealth * arenaCfg.Balance.MaxSingleHitHealthFraction + 0.5))
@@ -511,7 +525,7 @@ function ArenaService:AttackPlayer(attacker: any, targetUserId: number): Types.P
 
 	targetPart.health = math.max(0, targetPart.health - finalDamage)
 
-	local tagUntil = now + arenaCfg.CombatTagDurationSeconds
+	local tagUntil = now + arenaCfg.CombatTagSeconds
 	attackerPart.combatTagUntil = tagUntil
 	targetPart.combatTagUntil = tagUntil
 
@@ -523,9 +537,8 @@ function ArenaService:AttackPlayer(attacker: any, targetUserId: number): Types.P
 		end
 	end
 
-	local targetDefeated = targetPart.health <= 0
-	if targetDefeated then
-		-- Записываем статистику PvP-победы/поражения в профиль и восстанавливаем здоровье побеждённого на точке возрождения арены
+	local killed = targetPart.health <= 0
+	if killed then
 		playerDataService:UpdateProfile(attacker, function(p: Types.PlayerProfileData)
 			if type(p.customData) == "table" and type(p.customData.combat) == "table" then
 				p.customData.combat.pvpKills = (p.customData.combat.pvpKills or 0) + 1
@@ -539,23 +552,22 @@ function ArenaService:AttackPlayer(attacker: any, targetUserId: number): Types.P
 			return true
 		end)
 
-		-- Сбрасываем боевую метку у побеждённого и восстанавливаем здоровье для следующего раунда
 		targetPart.combatTagUntil = 0
 		targetPart.health = targetPart.maxHealth
-		local respawnPos = arenaCfg.SpawnPoints[1] or arenaCfg.CenterPosition
-		teleportPlayerCharacter(targetPlayer, respawnPos)
+		teleportPlayerCharacter(targetPlayer, getArenaSpawnPoint(1))
 	end
 
 	local resPayload: Types.PvPCombatResultPayload = {
 		ok = true,
-		errorCode = nil,
 		attackerUserId = attackerId,
 		targetUserId = targetUserId,
 		damageDealt = finalDamage,
-		isCrit = isCrit,
-		targetRemainingHealth = if targetDefeated then 0 else targetPart.health,
+		isCritical = isCritical,
+		targetHealth = if killed then 0 else targetPart.health,
 		targetMaxHealth = targetPart.maxHealth,
-		targetDefeated = targetDefeated,
+		killed = killed,
+		errorCode = nil,
+		message = if killed then "Победа в дуэли на арене!" else "Попадание в PvP!",
 	}
 
 	if isRealPlayer(targetPlayer) then

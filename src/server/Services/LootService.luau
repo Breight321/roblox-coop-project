@@ -65,21 +65,21 @@ local function pickWeightedEntry(entries: { Types.LootEntryDef }, rng: Random): 
 	return entries[#entries]
 end
 
-local function appendOrMergeDrop(drops: { Types.LootDrop }, dropType: "Currency" | "Item" | "XP", id: string, amount: number): ()
+local function appendOrMergeDrop(drops: { Types.LootDrop }, kind: "Currency" | "Item" | "XP", id: string, amount: number): ()
 	if amount <= 0 then
 		return
 	end
-	-- Валюту и XP одного типа объединяем в один элемент списка, а предметы с количеством также суммируем по id
 	for _, existing in ipairs(drops) do
-		if existing.dropType == dropType and existing.id == id then
+		if existing.kind == kind and existing.id == id then
 			existing.amount += amount
 			return
 		end
 	end
 	table.insert(drops, {
-		dropType = dropType,
+		kind = kind,
 		id = id,
 		amount = amount,
+		itemUid = nil,
 	})
 end
 
@@ -115,7 +115,7 @@ function LootService:RollLootTable(lootTableId: string, customRng: Random?): { T
 	for _, entry in ipairs(tableDef.entries) do
 		if entry.guaranteed then
 			local amount = rollAmount(entry, rng)
-			appendOrMergeDrop(drops, entry.dropType, entry.id, amount)
+			appendOrMergeDrop(drops, entry.kind, entry.id, amount)
 		end
 	end
 
@@ -125,7 +125,7 @@ function LootService:RollLootTable(lootTableId: string, customRng: Random?): { T
 		local picked = pickWeightedEntry(tableDef.entries, rng)
 		if picked then
 			local amount = rollAmount(picked, rng)
-			appendOrMergeDrop(drops, picked.dropType, picked.id, amount)
+			appendOrMergeDrop(drops, picked.kind, picked.id, amount)
 		end
 	end
 
@@ -148,31 +148,35 @@ function LootService:GrantDrops(player: any, drops: { Types.LootDrop }, reason: 
 	for _, drop in ipairs(drops) do
 		local amount = math.floor(drop.amount or 0)
 		if amount > 0 then
-			if drop.dropType == "Currency" then
+			if drop.kind == "Currency" then
 				local res = economyService:AddCurrency(player, drop.id, amount, cleanReason)
 				if res and res.ok then
 					table.insert(granted, {
-						dropType = "Currency",
+						kind = "Currency",
 						id = drop.id,
 						amount = amount,
+						itemUid = nil,
 					})
 				end
-			elseif drop.dropType == "XP" then
+			elseif drop.kind == "XP" then
 				local res = progressionService:AddXP(player, amount)
 				if res and res.ok then
 					table.insert(granted, {
-						dropType = "XP",
+						kind = "XP",
 						id = "XP",
 						amount = amount,
+						itemUid = nil,
 					})
 				end
-			elseif drop.dropType == "Item" and drop.id ~= "none" then
+			elseif drop.kind == "Item" and drop.id ~= "none" then
 				local res = inventoryService:GrantItem(player, drop.id, amount)
 				if res and res.ok then
+					local grantedItem = res.value :: Types.InventoryItem?
 					table.insert(granted, {
-						dropType = "Item",
+						kind = "Item",
 						id = drop.id,
 						amount = amount,
+						itemUid = if grantedItem then grantedItem.uid else nil,
 					})
 				end
 			end

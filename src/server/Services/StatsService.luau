@@ -70,15 +70,17 @@ end
 local function createDefaultStats(): Types.CharacterStatsPayload
 	local base = CombatConfig.BaseStats
 	return {
-		maxHealth = base.maxHealth,
-		damage = base.damage,
-		defense = base.defense,
-		moveSpeed = base.moveSpeed,
+		level = 1,
+		attackPower = base.attackPower,
 		critChance = base.critChance,
 		critMultiplier = base.critMultiplier,
+		maxHealth = base.maxHealth,
+		defense = base.defense,
+		damageReduction = 0,
+		moveSpeed = base.moveSpeed,
 		attackCooldown = base.attackCooldown,
 		equippedBodyParts = {},
-		activeSetBonusId = nil,
+		activeSetBonus = nil,
 	}
 end
 
@@ -95,7 +97,7 @@ local function applyStatsToCharacter(player: any, stats: Types.CharacterStatsPay
 	character:SetAttribute("EquippedBodyArms", stats.equippedBodyParts.Arms or "")
 	character:SetAttribute("EquippedBodyTorso", stats.equippedBodyParts.Torso or "")
 	character:SetAttribute("EquippedBodyLegs", stats.equippedBodyParts.Legs or "")
-	character:SetAttribute("ActiveBodySetId", stats.activeSetBonusId or "")
+	character:SetAttribute("ActiveBodySetId", stats.activeSetBonus or "")
 
 	local humanoid = character:FindFirstChildOfClass("Humanoid")
 	if humanoid then
@@ -236,17 +238,34 @@ function StatsService:RecalculateAndApply(player: any): Types.CharacterStatsPayl
 	local perLevel = CombatConfig.PerLevelStats
 	local levelAboveOne = math.max(0, profile.level - 1)
 
-	local maxHealth = base.maxHealth + levelAboveOne * perLevel.maxHealth
-	local damage = base.damage + levelAboveOne * perLevel.damage
-	local defense = base.defense + levelAboveOne * perLevel.defense
+	local flatAttackPower = base.attackPower + levelAboveOne * perLevel.attackPower
+	local flatMaxHealth = base.maxHealth + levelAboveOne * perLevel.maxHealth
+	local flatDefense = base.defense + levelAboveOne * perLevel.defense
 	local moveSpeed = base.moveSpeed
 	local critChance = base.critChance
 	local critMultiplier = base.critMultiplier
-	local attackSpeedBonus = 0
+	local cooldownReduction = 0
+	local attackPowerPct = 0
+	local maxHealthPct = 0
+
+	local function addStatBlock(block: any): ()
+		if type(block) ~= "table" then
+			return
+		end
+		flatAttackPower += (block.attackPower or 0)
+		flatMaxHealth += (block.maxHealth or 0)
+		flatDefense += (block.defense or 0)
+		moveSpeed += (block.moveSpeed or 0)
+		critChance += (block.critChance or 0)
+		critMultiplier += (block.critMultiplier or 0)
+		cooldownReduction += (block.attackCooldownReduction or 0)
+		attackPowerPct += (block.attackPowerPct or 0)
+		maxHealthPct += (block.maxHealthPct or 0)
+	end
 
 	-- 1. Бонусы от экипированных деталей тела (Head, Arms, Torso, Legs)
 	local equippedBySlot = self:GetEquippedBodyParts(player)
-	local equippedItemIds: { [Types.BodySlot]: string? } = {}
+	local equippedItemIds: { [Types.BodySlot]: string } = {}
 	local setCounts: { [string]: number } = {}
 
 	for _, slot in ipairs(ALL_SLOTS) do
@@ -256,15 +275,7 @@ function StatsService:RecalculateAndApply(player: any): Types.CharacterStatsPayl
 			local def = ItemsConfig[invItem.itemId]
 			local meta = if def and type(def.metadata) == "table" then def.metadata else invItem.metadata
 			if type(meta) == "table" then
-				local stats = meta.stats
-				if type(stats) == "table" then
-					damage += (stats.damage or 0)
-					maxHealth += (stats.maxHealth or 0)
-					defense += (stats.defense or 0)
-					moveSpeed += (stats.moveSpeed or 0)
-					critChance += (stats.critChance or 0)
-					attackSpeedBonus += (stats.attackSpeed or 0)
-				end
+				addStatBlock(meta.stats)
 				if type(meta.setId) == "string" then
 					local setId = meta.setId :: string
 					setCounts[setId] = (setCounts[setId] or 0) + 1
@@ -274,17 +285,12 @@ function StatsService:RecalculateAndApply(player: any): Types.CharacterStatsPayl
 	end
 
 	-- 2. Бонус полного набора (4 детали одного setId)
-	local activeSetBonusId: string? = nil
+	local activeSetBonus: string? = nil
 	for setId, count in pairs(setCounts) do
-		if count >= 4 and BodySetsConfig[setId] ~= nil then
-			activeSetBonusId = setId
-			local setBonus = BodySetsConfig[setId].fullSetBonus
-			damage += (setBonus.damage or 0)
-			maxHealth += (setBonus.maxHealth or 0)
-			defense += (setBonus.defense or 0)
-			moveSpeed += (setBonus.moveSpeed or 0)
-			critChance += (setBonus.critChance or 0)
-			attackSpeedBonus += (setBonus.attackSpeed or 0)
+		local setDef = BodySetsConfig[setId]
+		if setDef and count >= (setDef.requiredPieceCount or 4) then
+			activeSetBonus = setId
+			addStatBlock(setDef.fullSetBonus)
 			break
 		end
 	end
@@ -292,30 +298,31 @@ function StatsService:RecalculateAndApply(player: any): Types.CharacterStatsPayl
 	-- 3. Бонусы от дерева пассивных навыков (SkillTreeService)
 	if skillTreeService then
 		local skillBonuses: Types.BodyStatBlock = skillTreeService:GetSkillBonuses(player)
-		damage += (skillBonuses.damage or 0)
-		maxHealth += (skillBonuses.maxHealth or 0)
-		defense += (skillBonuses.defense or 0)
-		moveSpeed += (skillBonuses.moveSpeed or 0)
-		critChance += (skillBonuses.critChance or 0)
-		attackSpeedBonus += (skillBonuses.attackSpeed or 0)
+		addStatBlock(skillBonuses)
 	end
 
-	local clampedAttackSpeed = math.clamp(attackSpeedBonus, 0, 0.65)
+	local finalAttackPower = math.max(1, math.floor(flatAttackPower * (1 + math.max(0, attackPowerPct)) + 0.5))
+	local finalMaxHealth = math.max(1, math.floor(flatMaxHealth * (1 + math.max(0, maxHealthPct)) + 0.5))
+	local finalDefense = math.max(0, math.floor(flatDefense + 0.5))
+	local rawReduction = finalDefense / (finalDefense + CombatConfig.DefenseConstant)
+	local damageReduction = math.clamp(rawReduction, 0, CombatConfig.MaxDamageReduction)
 	local effectiveCooldown = math.max(
 		CombatConfig.MinAttackCooldown,
-		math.floor((base.attackCooldown * (1 - clampedAttackSpeed)) * 1000 + 0.5) / 1000
+		math.floor((base.attackCooldown - math.max(0, cooldownReduction)) * 1000 + 0.5) / 1000
 	)
 
 	local payload: Types.CharacterStatsPayload = {
-		maxHealth = math.max(1, math.floor(maxHealth + 0.5)),
-		damage = math.max(1, math.floor(damage + 0.5)),
-		defense = math.max(0, math.floor(defense + 0.5)),
+		level = profile.level,
+		attackPower = finalAttackPower,
+		critChance = math.clamp(critChance, 0, CombatConfig.MaxCritChance),
+		critMultiplier = math.max(1.0, critMultiplier),
+		maxHealth = finalMaxHealth,
+		defense = finalDefense,
+		damageReduction = damageReduction,
 		moveSpeed = math.clamp(moveSpeed, 8, 45),
-		critChance = math.clamp(critChance, 0, 0.75),
-		critMultiplier = critMultiplier,
 		attackCooldown = effectiveCooldown,
 		equippedBodyParts = equippedItemIds,
-		activeSetBonusId = activeSetBonusId,
+		activeSetBonus = activeSetBonus,
 	}
 
 	cachedStats[player] = payload
@@ -340,9 +347,9 @@ end
 function StatsService:ComputeMitigatedDamage(rawDamage: number, defense: number): number
 	local cleanDamage = math.max(1, rawDamage)
 	local cleanDefense = math.max(0, defense)
-	-- Стандартная гиперболическая формула брони: урон * (100 / (100 + defense))
-	local factor = 100 / (100 + cleanDefense)
-	return math.max(1, math.floor(cleanDamage * factor + 0.5))
+	local rawReduction = cleanDefense / (cleanDefense + CombatConfig.DefenseConstant)
+	local reduction = math.clamp(rawReduction, 0, CombatConfig.MaxDamageReduction)
+	return math.max(1, math.floor(cleanDamage * (1 - reduction) + 0.5))
 end
 
 return StatsService

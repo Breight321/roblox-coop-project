@@ -134,7 +134,8 @@ local function ensureChestWorldMarkers(): ()
 			part:SetAttribute("ChestId", def.id)
 			part:SetAttribute("ZoneId", def.zoneId)
 			part:SetAttribute("DisplayName", def.displayName)
-			part:SetAttribute("RequiredPlayerLevel", def.requiredPlayerLevel)
+			part:SetAttribute("MinPlayerLevel", def.minPlayerLevel)
+			part:SetAttribute("RequiredPlayerLevel", def.minPlayerLevel)
 			part:SetAttribute("RequiredKillsSinceLastOpen", def.requiredKillsSinceLastOpen)
 			part:SetAttribute("CooldownSeconds", def.cooldownSeconds)
 			part.Parent = validChests
@@ -152,21 +153,21 @@ local function buildSingleChestState(
 	local rec = chestsSec[chestDef.id]
 	local lastOpenedAt = if rec and type(rec.lastOpenedAt) == "number" then rec.lastOpenedAt else 0
 	local killsAtLastOpen = if rec and type(rec.killsAtLastOpen) == "number" then rec.killsAtLastOpen else 0
-	local nextAvailableAt = if lastOpenedAt > 0 then (lastOpenedAt + chestDef.cooldownSeconds) else 0
+	local readyAtUnix = if lastOpenedAt > 0 then (lastOpenedAt + chestDef.cooldownSeconds) else 0
 	local killsSinceLast = math.max(0, totalMobKills - killsAtLastOpen)
 	local killsProgress = math.min(chestDef.requiredKillsSinceLastOpen, killsSinceLast)
 
-	local zoneUnlocked = profile.unlockedZones[chestDef.zoneId] == true
-	local levelOk = profile.level >= chestDef.requiredPlayerLevel
-	local cooldownOk = now >= nextAvailableAt
+	local zoneUnlocked = chestDef.zoneId == "spawn_meadow" or profile.unlockedZones[chestDef.zoneId] == true
+	local levelOk = profile.level >= chestDef.minPlayerLevel
+	local cooldownOk = now >= readyAtUnix
 	local killsOk = killsSinceLast >= chestDef.requiredKillsSinceLastOpen
 
 	return {
 		chestId = chestDef.id,
-		nextAvailableAt = nextAvailableAt,
-		killsProgress = killsProgress,
-		killsRequired = chestDef.requiredKillsSinceLastOpen,
-		canOpen = zoneUnlocked and levelOk and cooldownOk and killsOk,
+		readyAtUnix = readyAtUnix,
+		requiredKills = chestDef.requiredKillsSinceLastOpen,
+		killsSinceLastOpen = killsProgress,
+		isReady = zoneUnlocked and levelOk and cooldownOk and killsOk,
 	}
 end
 
@@ -256,35 +257,33 @@ function ChestService:GetChestStates(player: any): { [string]: Types.ChestStateP
 end
 
 function ChestService:OpenChest(player: any, chestId: string): Types.ChestOpenResultPayload
-	local function fail(code: Types.ChestErrorCode, cId: string, state: Types.ChestStatePayload?): Types.ChestOpenResultPayload
-		local fallbackState: Types.ChestStatePayload = state
-			or {
-				chestId = cId,
-				nextAvailableAt = 0,
-				killsProgress = 0,
-				killsRequired = 0,
-				canOpen = false,
-			}
+	local function fail(
+		code: Types.ChestErrorCode,
+		msg: string,
+		cId: string,
+		state: Types.ChestStatePayload?
+	): Types.ChestOpenResultPayload
 		return {
 			ok = false,
-			errorCode = code,
 			chestId = cId,
 			drops = {},
-			chestState = fallbackState,
+			state = state,
+			errorCode = code,
+			message = msg,
 		}
 	end
 
 	if not isValidPlayerKey(player) then
-		return fail("INVALID_PLAYER", tostring(chestId or ""), nil)
+		return fail("INVALID_PLAYER", "Некорректный игрок.", tostring(chestId or ""), nil)
 	end
 
 	local profile = unwrapProfile(player)
 	if not profile then
-		return fail("PROFILE_NOT_LOADED", tostring(chestId or ""), nil)
+		return fail("PROFILE_NOT_LOADED", "Профиль ещё не загружен.", tostring(chestId or ""), nil)
 	end
 
 	if type(chestId) ~= "string" or CombatConfig.Chests[chestId] == nil then
-		return fail("UNKNOWN_CHEST", tostring(chestId or ""), nil)
+		return fail("UNKNOWN_CHEST", "Сундук не найден.", tostring(chestId or ""), nil)
 	end
 
 	local chestDef = CombatConfig.Chests[chestId]
@@ -293,7 +292,7 @@ function ChestService:OpenChest(player: any, chestId: string): Types.ChestOpenRe
 	local currentState = buildSingleChestState(profile, chestDef, combatRecord.totalMobKills, now)
 
 	if openingLocks[player] == true then
-		return fail("REQUEST_IN_PROGRESS", chestId, currentState)
+		return fail("REQUEST_IN_PROGRESS", "Запрос уже обрабатывается.", chestId, currentState)
 	end
 
 	openingLocks[player] = true
@@ -303,30 +302,48 @@ function ChestService:OpenChest(player: any, chestId: string): Types.ChestOpenRe
 		return payload
 	end
 
-	if not profile.unlockedZones[chestDef.zoneId] then
-		return unlockAndReturn(fail("ZONE_LOCKED", chestId, currentState))
+	if chestDef.zoneId ~= "spawn_meadow" and not profile.unlockedZones[chestDef.zoneId] then
+		return unlockAndReturn(fail("ZONE_LOCKED", "Зона с этим сундуком ещё не открыта.", chestId, currentState))
 	end
 
-	if profile.level < chestDef.requiredPlayerLevel then
-		return unlockAndReturn(fail("LEVEL_TOO_LOW", chestId, currentState))
+	if profile.level < chestDef.minPlayerLevel then
+		return unlockAndReturn(
+			fail(
+				"LEVEL_TOO_LOW",
+				string.format("Требуется уровень %d для открытия сундука.", chestDef.minPlayerLevel),
+				chestId,
+				currentState
+			)
+		)
 	end
 
 	local hasPos, playerPos = getPlayerPosition(player, chestDef.position)
 	if not hasPos or not playerPos then
-		return unlockAndReturn(fail("CHARACTER_NOT_READY", chestId, currentState))
+		return unlockAndReturn(fail("CHARACTER_NOT_READY", "Персонаж не готов.", chestId, currentState))
 	end
 
 	local dist = (playerPos - chestDef.position).Magnitude
 	if dist > chestDef.interactionRadius then
-		return unlockAndReturn(fail("OUT_OF_RANGE", chestId, currentState))
+		return unlockAndReturn(fail("OUT_OF_RANGE", "Подойдите ближе к сундуку.", chestId, currentState))
 	end
 
-	if now < currentState.nextAvailableAt then
-		return unlockAndReturn(fail("CHEST_COOLDOWN", chestId, currentState))
+	if now < currentState.readyAtUnix then
+		return unlockAndReturn(fail("CHEST_COOLDOWN", "Сундук ещё перезаряжается.", chestId, currentState))
 	end
 
-	if currentState.killsProgress < chestDef.requiredKillsSinceLastOpen then
-		return unlockAndReturn(fail("NOT_ENOUGH_KILLS", chestId, currentState))
+	if currentState.killsSinceLastOpen < chestDef.requiredKillsSinceLastOpen then
+		return unlockAndReturn(
+			fail(
+				"NOT_ENOUGH_KILLS",
+				string.format(
+					"Победите ещё мобов (%d/%d), чтобы распечатать сундук.",
+					currentState.killsSinceLastOpen,
+					chestDef.requiredKillsSinceLastOpen
+				),
+				chestId,
+				currentState
+			)
+		)
 	end
 
 	-- Фиксируем открытие сундука в профиле игрока
@@ -352,10 +369,11 @@ function ChestService:OpenChest(player: any, chestId: string): Types.ChestOpenRe
 
 	return unlockAndReturn({
 		ok = true,
-		errorCode = nil,
 		chestId = chestId,
 		drops = grantedDrops,
-		chestState = updatedState,
+		state = updatedState,
+		errorCode = nil,
+		message = string.format("Сундук «%s» открыт!", chestDef.displayName),
 	})
 end
 
