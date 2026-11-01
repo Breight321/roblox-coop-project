@@ -10,6 +10,7 @@
 	- Никогда не изменяет баланс, вместимость сумки, уровни улучшений и общий прогресс сервера локально как финальные значения.
 ]]
 
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("Shared")
@@ -89,21 +90,57 @@ local lastUpgradeClock = 0
 
 local rbxConnections: { RBXScriptConnection } = {}
 
-local function normalizeNodeId(rawNodeId: string?): string
-	if type(rawNodeId) == "string" and #rawNodeId > 0 then
-		if HarvestConfig.ExtractionZones[rawNodeId] then
-			return rawNodeId
-		end
+local function resolveNodeId(rawNodeId: string?): string
+	if type(rawNodeId) == "string" and HarvestConfig.ExtractionZones[rawNodeId] then
+		activeExtractionNodeId = rawNodeId
+		return rawNodeId
 	end
+
+	local localPlayer = Players.LocalPlayer
+	local char = if localPlayer then localPlayer.Character else nil
+	local rootPart = if char then char:FindFirstChild("HumanoidRootPart") else nil
+	if rootPart and rootPart:IsA("BasePart") then
+		local pos = rootPart.Position
+		local bestId = activeExtractionNodeId or HarvestConfig.DefaultNodeId
+		local bestDist = math.huge
+		for zoneId, zoneDef in pairs(HarvestConfig.ExtractionZones) do
+			local dist = (pos - zoneDef.centerPosition).Magnitude
+			if dist <= zoneDef.radius and dist < bestDist then
+				bestDist = dist
+				bestId = zoneId
+			end
+		end
+		activeExtractionNodeId = bestId
+		return bestId
+	end
+
 	return activeExtractionNodeId or HarvestConfig.DefaultNodeId
 end
 
-local function normalizeStationId(rawStationId: string?): string
-	if type(rawStationId) == "string" and #rawStationId > 0 then
-		if HarvestConfig.DepositStations[rawStationId] then
-			return rawStationId
-		end
+local function resolveStationId(rawStationId: string?): string
+	if type(rawStationId) == "string" and HarvestConfig.DepositStations[rawStationId] then
+		return rawStationId
 	end
+
+	local localPlayer = Players.LocalPlayer
+	local char = if localPlayer then localPlayer.Character else nil
+	local rootPart = if char then char:FindFirstChild("HumanoidRootPart") else nil
+	if rootPart and rootPart:IsA("BasePart") then
+		local pos = rootPart.Position
+		local bestId = HarvestConfig.DefaultStationId
+		local bestDist = math.huge
+		for stId, stDef in pairs(HarvestConfig.DepositStations) do
+			if stDef.active then
+				local dist = (pos - stDef.position).Magnitude
+				if dist < bestDist then
+					bestDist = dist
+					bestId = stId
+				end
+			end
+		end
+		return bestId
+	end
+
 	return HarvestConfig.DefaultStationId
 end
 
@@ -380,7 +417,7 @@ function ExpeditionController:RequestCollect(
 	end
 	lastCollectClock = now
 
-	local targetNodeId = normalizeNodeId(nodeId)
+	local targetNodeId = resolveNodeId(nodeId)
 	collectStatus = "Loading"
 	bagStatusMessage = "Добыча Solar Shards... ожидание ответа сервера"
 
@@ -420,7 +457,7 @@ function ExpeditionController:RequestDeposit(stationId: string?): Types.Result<b
 	end
 	lastDepositClock = now
 
-	lastStationId = normalizeStationId(stationId)
+	lastStationId = resolveStationId(stationId)
 	depositStatus = "Loading"
 	lastDepositError = nil
 	bagStatusMessage = "⏳ Отправка добычи на Станцию Переплавки..."
@@ -632,7 +669,6 @@ function ExpeditionController:ApplyServerHarvestResult(result: Types.HarvestResu
 	emitStateChanged()
 end
 
--- Совместимый адаптер для модульных тестов и прямого обновления сумки
 function ExpeditionController:ApplyServerBagUpdate(arg1: any, arg2: any, arg3: any): ()
 	if type(arg1) == "table" then
 		if arg1.bagStored ~= nil then

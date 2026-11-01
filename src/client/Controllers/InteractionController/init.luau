@@ -200,7 +200,7 @@ function InteractionController:TriggerPrimaryAction(): Types.Result<boolean, str
 
 	local equippedToolUid = if worldController then worldController:GetEquippedToolUid() else nil
 	if expeditionController then
-		local res = expeditionController:RequestCollect("sunforge_crater", equippedToolUid)
+		local res = expeditionController:RequestCollect(nil, equippedToolUid)
 		if res.ok then
 			self.OnPrimaryActionTriggered:Fire(equippedToolUid)
 			self.OnActionTriggered:Fire("PrimaryAction", equippedToolUid)
