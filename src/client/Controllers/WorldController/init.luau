@@ -2,7 +2,9 @@
 --[[
 	@module WorldController
 	@owner Agent B (anarugod)
-	@description Универсальный контроллер игрового мира и зон: синхронизация открытых локаций, кастомные валидаторы доступа, барьеры зон и визуал экипировки.
+	@description Универсальный контроллер игрового мира и зон: синхронизация открытых локаций,
+	кастомные валидаторы доступа, барьеры зон, общая зона добычи «Aetherfall: Expedition Core»
+	(ExpeditionZoneManager) и визуал экипировки.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,10 +22,11 @@ local WorldConfig = require(script:WaitForChild("Config"))
 local WorldFolder = script.Parent.Parent:WaitForChild("World")
 local ZoneGateManager = require(WorldFolder:WaitForChild("Zones"):WaitForChild("ZoneGateManager"))
 local ItemDisplayManager = require(WorldFolder:WaitForChild("Items"):WaitForChild("ItemDisplayManager"))
+local ExpeditionZoneManager = require(WorldFolder:WaitForChild("ExpeditionZoneManager"))
 
 local WorldController = {
 	Name = "WorldController",
-	Dependencies = { "UIController", "AudioController" },
+	Dependencies = { "UIController", "AudioController", "ExpeditionController" },
 	OnZoneEntered = Signal.new(),
 	OnZonesSynced = Signal.new(),
 }
@@ -31,6 +34,7 @@ local WorldController = {
 local log = Logger.new("WorldController")
 local uiController: any = nil
 local audioController: any = nil
+local expeditionController: any = nil
 
 local currentZoneId = WorldConfig.DefaultStartingZoneId
 local unlockedZonesState: { [string]: boolean } = {
@@ -42,11 +46,58 @@ local connections: { Signal.SignalConnection } = {}
 function WorldController:Init(registry: any): ()
 	uiController = registry:TryGet("UIController")
 	audioController = registry:TryGet("AudioController")
+	expeditionController = registry:TryGet("ExpeditionController")
 	log:Info("Initialized WorldController")
 end
 
 function WorldController:Start(): ()
 	self:SyncUnlockedZones(unlockedZonesState)
+
+	if WorldConfig.AutoSyncGatesToWorkspace then
+		ExpeditionZoneManager.EnsureWorld({
+			OnCollectNodeTriggered = function(nodeId: string)
+				if expeditionController then
+					expeditionController:RequestCollect(nodeId, self:GetEquippedToolUid())
+				end
+			end,
+			OnDepositStationTriggered = function(stationId: string)
+				if expeditionController then
+					expeditionController:RequestDeposit(stationId)
+				end
+			end,
+		})
+	end
+
+	if expeditionController then
+		ExpeditionZoneManager.SyncBagAndDepositState(expeditionController:GetBagState())
+		ExpeditionZoneManager.SyncTeamMonument(expeditionController:GetTeamProgress())
+
+		table.insert(
+			connections,
+			expeditionController.OnStateChanged:Connect(function()
+				ExpeditionZoneManager.SyncBagAndDepositState(expeditionController:GetBagState())
+				ExpeditionZoneManager.SyncTeamMonument(expeditionController:GetTeamProgress())
+			end)
+		)
+
+		table.insert(
+			connections,
+			expeditionController.OnCollectFeedback:Connect(function(nodeId: string)
+				ExpeditionZoneManager.PlayNodePulse(nodeId)
+			end)
+		)
+
+		table.insert(
+			connections,
+			expeditionController.OnStageUnlocked:Connect(function(teamVm: any)
+				if type(teamVm) == "table" and type(teamVm.stageId) == "string" then
+					local updated = table.clone(unlockedZonesState)
+					updated[teamVm.stageId] = true
+					self:SyncUnlockedZones(updated)
+				end
+			end)
+		)
+	end
 
 	if uiController then
 		table.insert(
@@ -182,6 +233,7 @@ function WorldController:Shutdown(): ()
 	table.clear(connections)
 	ZoneGateManager.Cleanup()
 	ItemDisplayManager.Cleanup()
+	ExpeditionZoneManager.Cleanup()
 	log:Info("Shutdown WorldController")
 end
 
