@@ -9,8 +9,9 @@ local InteractionConfig = {
 	DefaultActionCooldownSeconds = 0.15,
 
 	DefaultWindowHotkeys = {
-		[Enum.KeyCode.F] = "Shop",
-		[Enum.KeyCode.B] = "Inventory",
+		[Enum.KeyCode.U] = "Upgrades",
+		[Enum.KeyCode.B] = "Shop",
+		[Enum.KeyCode.I] = "Inventory",
 		[Enum.KeyCode.Q] = "Quests",
 		[Enum.KeyCode.R] = "Rebirth",
 	} :: { [Enum.KeyCode]: string },

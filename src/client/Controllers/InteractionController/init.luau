@@ -2,7 +2,9 @@
 --[[
 	@module InteractionController
 	@owner Agent B (anarugod)
-	@description Универсальный переиспользуемый контроллер интеракций и ввода: регистрация произвольных игровых действий, кулдауны, хоткеи окон и сетевые намерения.
+	@description Универсальный переиспользуемый контроллер интеракций и ввода:
+	регистрация произвольных игровых действий, кулдауны, хоткеи окон и интеграция
+	со сбором Solar Shards / сдачей на станции / улучшениями через ExpeditionController.
 ]]
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -20,7 +22,13 @@ local InteractionConfig = require(script:WaitForChild("Config"))
 
 local InteractionController = {
 	Name = "InteractionController",
-	Dependencies = { "UIController", "WorldController", "AudioController", "AnimationController" },
+	Dependencies = {
+		"UIController",
+		"WorldController",
+		"AudioController",
+		"AnimationController",
+		"ExpeditionController",
+	},
 	OnPrimaryActionTriggered = Signal.new(),
 	OnActionTriggered = Signal.new(),
 }
@@ -30,6 +38,7 @@ local uiController: any = nil
 local worldController: any = nil
 local audioController: any = nil
 local animationController: any = nil
+local expeditionController: any = nil
 
 local interactionEnabled = true
 local lastClickClock = 0
@@ -45,6 +54,7 @@ function InteractionController:Init(registry: any): ()
 	worldController = registry:TryGet("WorldController")
 	audioController = registry:TryGet("AudioController")
 	animationController = registry:TryGet("AnimationController")
+	expeditionController = registry:TryGet("ExpeditionController")
 	log:Info("Initialized InteractionController")
 end
 
@@ -188,6 +198,18 @@ function InteractionController:TriggerPrimaryAction(): Types.Result<boolean, str
 		return Types.Err("INTERACTION_DISABLED")
 	end
 
+	local equippedToolUid = if worldController then worldController:GetEquippedToolUid() else nil
+	if expeditionController then
+		local res = expeditionController:RequestCollect("sunforge_crater", equippedToolUid)
+		if res.ok then
+			self.OnPrimaryActionTriggered:Fire(equippedToolUid)
+			self.OnActionTriggered:Fire("PrimaryAction", equippedToolUid)
+		elseif res.error == "BAG_FULL" and uiController then
+			uiController:ShowNotification("Warning", "🎒 Сумка полна! Сдайте Solar Shards на Станции Переплавки!")
+		end
+		return res
+	end
+
 	local cooldown = if GameConfig.Simulator
 		then GameConfig.Simulator.ClickCooldownSeconds
 		else InteractionConfig.DefaultActionCooldownSeconds
@@ -197,7 +219,6 @@ function InteractionController:TriggerPrimaryAction(): Types.Result<boolean, str
 	end
 	lastClickClock = now
 
-	local equippedToolUid = if worldController then worldController:GetEquippedToolUid() else nil
 	if audioController then
 		audioController:PlaySFX("Click", 0.08)
 	end
@@ -217,6 +238,22 @@ end
 
 function InteractionController:IsInteractionEnabled(): boolean
 	return interactionEnabled
+end
+
+function InteractionController:RequestDeposit(stationId: string?): Types.Result<boolean, string>
+	if expeditionController then
+		return expeditionController:RequestDeposit(stationId)
+	end
+	Network.FireServer(Network.Events.RequestDeposit, stationId or "central_refinery")
+	return Types.Ok(true)
+end
+
+function InteractionController:RequestUpgrade(trackId: "Tool" | "Bag"): Types.Result<boolean, string>
+	if expeditionController then
+		return expeditionController:RequestUpgrade(trackId)
+	end
+	Network.FireServer(Network.Events.RequestHarvestUpgrade, trackId)
+	return Types.Ok(true)
 end
 
 function InteractionController:RequestShopPurchase(shopItemId: string): ()

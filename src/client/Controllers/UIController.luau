@@ -2,7 +2,9 @@
 --[[
 	@module UIController
 	@owner Agent B (anarugod)
-	@description Оркестратор пользовательского интерфейса: управление экранами через WindowManager, HUD, модульным ShopUI, инвентарём, квестами, ребиртами и уведомлениями.
+	@description Оркестратор пользовательского интерфейса для «Aetherfall: Expedition Core»:
+	управление экранами через WindowManager, HUD (сумка, баланс, сдача добычи, командная цель),
+	экраном улучшений (UpgradesView), модульным ShopUI, инвентарём, квестами, ребиртами и уведомлениями.
 ]]
 
 local Players = game:GetService("Players")
@@ -21,13 +23,14 @@ local ComponentsFolder = UIFolder:WaitForChild("Components")
 local HUDComponent = require(ComponentsFolder:WaitForChild("HUDComponent"))
 local WindowComponent = require(ComponentsFolder:WaitForChild("WindowComponent"))
 local NotificationComponent = require(ComponentsFolder:WaitForChild("NotificationComponent"))
+local UpgradesView = require(ComponentsFolder:WaitForChild("UpgradesView"))
 local InventoryView = require(ComponentsFolder:WaitForChild("InventoryView"))
 local QuestsView = require(ComponentsFolder:WaitForChild("QuestsView"))
 local RebirthView = require(ComponentsFolder:WaitForChild("RebirthView"))
 
 local UIController = {
 	Name = "UIController",
-	Dependencies = { "AudioController", "AnimationController" },
+	Dependencies = { "AudioController", "AnimationController", "ExpeditionController" },
 	OnScreenChanged = Signal.new(),
 	OnStateUpdated = Signal.new(),
 	OnCurrencyUpdated = Signal.new(),
@@ -41,6 +44,7 @@ local UIController = {
 local log = Logger.new("UIController")
 local audioController: any = nil
 local animationController: any = nil
+local expeditionController: any = nil
 
 local screenGui: ScreenGui? = nil
 local hudHandle: HUDComponent.HUDHandle? = nil
@@ -50,10 +54,12 @@ local shopUI: ShopUI.ShopUIInstance? = nil
 
 local cachedProfile: Types.PlayerProfileData? = nil
 local connections: { RBXScriptConnection } = {}
+local signalConnections: { any } = {}
 
 function UIController:Init(registry: any): ()
 	audioController = registry:Get("AudioController")
 	animationController = registry:Get("AnimationController")
+	expeditionController = registry:TryGet("ExpeditionController")
 
 	windowManager = WindowManager.new({
 		OnWindowOpened = function(name: string, handle: WindowComponent.WindowHandle)
@@ -78,7 +84,45 @@ function UIController:Init(registry: any): ()
 	log:Info("Initialized UIController")
 end
 
+function UIController:_refreshExpeditionUI(): ()
+	if not expeditionController then
+		return
+	end
+
+	local bagState = expeditionController:GetBagState()
+	local bankedCoins = expeditionController:GetBankedBalance()
+	local toolVm = expeditionController:GetUpgradeTrack("Tool")
+	local bagVm = expeditionController:GetUpgradeTrack("Bag")
+	local teamState = expeditionController:GetTeamProgress()
+
+	if hudHandle then
+		local gems = if cachedProfile and cachedProfile.currencies then (cachedProfile.currencies.Gems or 0) else 0
+		hudHandle:UpdateCurrencies(bankedCoins, gems)
+		hudHandle:UpdateBagState(bagState, toolVm.currentValue)
+		hudHandle:UpdateTeamProgress(teamState)
+	end
+
+	if windowManager then
+		local upgradesWin = windowManager:GetWindow("Upgrades")
+		if upgradesWin then
+			UpgradesView.Render(upgradesWin.Content, bagState, bankedCoins, toolVm, bagVm, {
+				OnRequestUpgrade = function(trackId)
+					expeditionController:RequestUpgrade(trackId)
+				end,
+				OnRetryUpgrade = function(trackId)
+					expeditionController:RetryUpgrade(trackId)
+				end,
+				OnRequestDeposit = function()
+					expeditionController:RequestDeposit("ui_quick_deposit")
+				end,
+			})
+		end
+	end
+end
+
 function UIController:_refreshDynamicViews(): ()
+	self:_refreshExpeditionUI()
+
 	if not cachedProfile or not windowManager then
 		return
 	end
@@ -150,13 +194,35 @@ function UIController:_mountInterface(): ()
 			animationController:PlayUIEffect("Bounce", button)
 			self.OnPrimaryClickRequested:Fire()
 		end,
+		OnDepositClick = function(button: GuiObject)
+			animationController:PlayUIEffect("Bounce", button)
+			if expeditionController then
+				local res = expeditionController:RequestDeposit("hud_deposit_button")
+				if not res.ok and res.error == "BAG_EMPTY" then
+					self:ShowNotification("Warning", "Сумка пуста! Сначала соберите Эфирные Монеты.")
+				end
+			end
+		end,
+		OnRetryDepositClick = function(button: GuiObject)
+			animationController:PlayUIEffect("Bounce", button)
+			if expeditionController then
+				expeditionController:RetryDeposit()
+			end
+		end,
+		OnSyncTeamClick = function()
+			if expeditionController then
+				expeditionController:RequestTeamSync()
+				self:ShowNotification("Success", "Запрос синхронизации командной цели отправлен.")
+			end
+		end,
 	})
 
 	local modalDefinitions = {
-		{ Name = "Shop", Title = "🛒 Simulator Shop" },
-		{ Name = "Inventory", Title = "🎒 Inventory & Pets" },
-		{ Name = "Quests", Title = "📜 Active Quests" },
-		{ Name = "Rebirth", Title = "🔥 Rebirth Altar" },
+		{ Name = "Upgrades", Title = "🛠️ Мастерская Улучшений (Инструмент и Сумка)" },
+		{ Name = "Shop", Title = "🛒 Экипировка и Питомцы Экспедиции" },
+		{ Name = "Inventory", Title = "🎒 Инвентарь и Снаряжение" },
+		{ Name = "Quests", Title = "📜 Задания Экспедиции" },
+		{ Name = "Rebirth", Title = "🔥 Алтарь Возрождения" },
 	}
 
 	for _, def in ipairs(modalDefinitions) do
@@ -170,10 +236,63 @@ function UIController:_mountInterface(): ()
 	if shopWin and shopUI then
 		shopUI:Mount(shopWin.Content)
 	end
+
+	self:_refreshExpeditionUI()
 end
 
 function UIController:Start(): ()
 	self:_mountInterface()
+
+	if expeditionController then
+		table.insert(
+			signalConnections,
+			expeditionController.OnStateChanged:Connect(function()
+				self:_refreshExpeditionUI()
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			expeditionController.OnDepositResolved:Connect(function(response: any)
+				if type(response) == "table" then
+					if response.ok then
+						self:ShowNotification(
+							"Success",
+							response.message
+								or string.format("Сдано +%d Монет в банк и цель команды!", response.depositedAmount or 0)
+						)
+					else
+						self:ShowNotification("Error", response.message or "Отказ сдачи добычи на станции.")
+					end
+				end
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			expeditionController.OnUpgradeResolved:Connect(function(response: any)
+				if type(response) == "table" then
+					if response.ok then
+						self:ShowNotification("Success", response.message or "Улучшение успешно приобретено!")
+					else
+						self:ShowNotification("Error", response.message or "Не удалось выполнить улучшение.")
+					end
+				end
+			end)
+		)
+
+		table.insert(
+			signalConnections,
+			expeditionController.OnStageUnlocked:Connect(function(teamVm: any)
+				if type(teamVm) == "table" then
+					self:ShowNotification(
+						"Reward",
+						string.format("🎉 Командная цель достигнута! Открыт этап: %s!", tostring(teamVm.nextStageName))
+					)
+				end
+			end)
+		)
+	end
 
 	table.insert(
 		connections,
@@ -325,6 +444,10 @@ function UIController:GetShopUI(): ShopUI.ShopUIInstance?
 	return shopUI
 end
 
+function UIController:GetHUDHandle(): HUDComponent.HUDHandle?
+	return hudHandle
+end
+
 function UIController:ShowNotification(notifType: string, message: string): ()
 	if notificationContainer then
 		NotificationComponent.ShowToast(notificationContainer, notifType, message, 3.0)
@@ -345,6 +468,11 @@ function UIController:Shutdown(): ()
 		conn:Disconnect()
 	end
 	table.clear(connections)
+
+	for _, conn in ipairs(signalConnections) do
+		conn:Disconnect()
+	end
+	table.clear(signalConnections)
 
 	if shopUI then
 		shopUI:Destroy()

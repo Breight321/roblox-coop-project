@@ -2,7 +2,7 @@
 --[[
 	@module ClientBootstrap (init.client.luau)
 	@owner Agent B (anarugod) & Shared Bootstrap
-	@description Точка входа клиентской части универсального фреймворка. Сначала мгновенно инициализирует и монтирует UI/контроллеры, затем запускает тесты.
+	@description Точка входа клиентской части «Aetherfall: Expedition Core». Сначала мгновенно инициализирует и монтирует UI/контроллеры, затем запускает клиентские тест-сьюты через TestRunner.
 ]]
 
 local Players = game:GetService("Players")
@@ -26,7 +26,7 @@ log:Info(
 
 local controllersFolder = script:WaitForChild("Controllers", 5)
 
--- 1. Сначала регистрируем и запускаем все клиентские контроллеры (включая UIController) без задержек!
+-- 1. Сначала регистрируем и запускаем все клиентские контроллеры (включая ExpeditionController и UIController)
 local clientRegistry = Registry.new("Client")
 
 if controllersFolder then
@@ -44,12 +44,12 @@ end
 local initRes = clientRegistry:InitAll()
 if initRes.ok then
 	clientRegistry:StartAll()
-	log:Info("Client Bootstrap complete — UI mounted.")
+	log:Info("Client Bootstrap complete — UI & Expedition loop mounted.")
 else
 	log:Error("Client Bootstrap failed: %s", tostring(initRes.error))
 end
 
--- 2. Изолированные тесты ShopUI запускаем в фоновом потоке после старта UI
+-- 2. Изолированные клиентские тест-сьюты запускаем в фоновом потоке после старта UI
 if GameConfig.RunTestsOnStartup then
 	task.spawn(function()
 		local uiFolder = script:FindFirstChild("UI")
@@ -59,6 +59,32 @@ if GameConfig.RunTestsOnStartup then
 		if shopTestsMod and shopTestsMod:IsA("ModuleScript") then
 			local shopUITests = require(shopTestsMod) :: any
 			TestRunner.RunSuite("ClientShopUISuite", shopUITests.GetTestCases())
+		end
+
+		if controllersFolder then
+			local expCtrl = controllersFolder:FindFirstChild("ExpeditionController")
+			local expTestsFolder = if expCtrl then expCtrl:FindFirstChild("tests") else nil
+			local expTestsMod = if expTestsFolder then expTestsFolder:FindFirstChild("ExpeditionTests") else nil
+			if expTestsMod and expTestsMod:IsA("ModuleScript") then
+				local expTests = require(expTestsMod) :: any
+				TestRunner.RunSuite("ClientExpeditionSuite", expTests.GetTestCases())
+			end
+
+			local intCtrl = controllersFolder:FindFirstChild("InteractionController")
+			local intTestsFolder = if intCtrl then intCtrl:FindFirstChild("tests") else nil
+			local intTestsMod = if intTestsFolder then intTestsFolder:FindFirstChild("InteractionTests") else nil
+			if intTestsMod and intTestsMod:IsA("ModuleScript") then
+				local intTests = require(intTestsMod) :: any
+				TestRunner.RunSuite("ClientInteractionSuite", intTests.GetTestCases())
+			end
+
+			local worldCtrl = controllersFolder:FindFirstChild("WorldController")
+			local worldTestsFolder = if worldCtrl then worldCtrl:FindFirstChild("tests") else nil
+			local worldTestsMod = if worldTestsFolder then worldTestsFolder:FindFirstChild("WorldTests") else nil
+			if worldTestsMod and worldTestsMod:IsA("ModuleScript") then
+				local worldTests = require(worldTestsMod) :: any
+				TestRunner.RunSuite("ClientWorldSuite", worldTests.GetTestCases())
+			end
 		end
 	end)
 end
