@@ -401,8 +401,9 @@ local function rebuildInventoryAndAssembly(self: any, recordDelta: boolean)
 		calcCritChance = math.max(srvCrit, calcCritChance)
 		calcCritMult = math.max(srvCritMult, calcCritMult)
 		calcCooldown = math.min(srvCd, calcCooldown)
-		if srv.activeSetId then
-			activeSetId = srv.activeSetId
+		local setIdFromSrv = srv.activeSetBonus or srv.activeSetId
+		if setIdFromSrv then
+			activeSetId = setIdFromSrv
 			local sDef = Config.BodySets[activeSetId]
 			activeSetName = sDef and sDef.displayName or activeSetId
 			activeSetDescription = sDef and sDef.description or activeSetDescription
@@ -998,8 +999,8 @@ function CombatController:_handleMobDefeated(payload: any)
 	local def = Config.SharedCombat.Mobs[mobId]
 	local displayName = tostring(payload.displayName or (def and def.displayName) or mobId)
 
-	local xp = tonumber(payload.xpGranted or payload.xpAwarded) or 0
-	local coins = tonumber(payload.coinsGranted or payload.coinsAwarded) or 0
+	local xp = tonumber(payload.xpGained or payload.xpGranted or payload.xpAwarded) or 0
+	local coins = tonumber(payload.coinsGained or payload.coinsGranted or payload.coinsAwarded) or 0
 	local drops = payload.drops or payload.droppedItems or {}
 
 	local dropNames = {}
@@ -1275,7 +1276,7 @@ function CombatController:_handlePvPCombatResult(result: any)
 	local localUserId = Players.LocalPlayer and Players.LocalPlayer.UserId or 0
 	if result.ok then
 		local dmg = tonumber(result.damageDealt) or 0
-		local ko = (result.knockout == true) or (result.eliminated == true)
+		local ko = (result.killed == true) or (result.knockout == true) or (result.eliminated == true)
 		local isAttacker = (result.attackerUserId == localUserId) or (result.attackerUserId == nil)
 
 		if ko then
